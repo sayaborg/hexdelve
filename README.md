@@ -1,2 +1,2 @@
-# hexdelve
-hex-grid roguelike prototype
+# Hexdelve
+Hex-grid roguelike prototype.
