@@ -2,13 +2,28 @@ export const CONFIG = {
   worldRadius: 40,
   defaultFixedMapId: 'corner_fear',
   defaultMapMode: 'generated',
-  generatedMap: {
-    family: 'cave',
-    seed: 20260415,
-    params: {
-      floorRate: 0.36,
-      loopiness: 0.14,
-      chokeDensity: 0.30,
+  defaultGeneratedMapId: 'generated_cave_natural',
+  generatedMaps: {
+    generated_cave_walk: {
+      label: 'Generated cave / walk',
+      family: 'cave',
+      seed: 20260415,
+      params: {
+        floorRate: 0.36,
+        loopiness: 0.14,
+        chokeDensity: 0.30,
+      },
+    },
+    generated_cave_natural: {
+      label: 'Generated cave / natural',
+      family: 'cave_natural',
+      seed: 20260418,
+      params: {
+        fillProb: 0.49,
+        smoothPasses: 5,
+        loopOpenings: 2,
+        minFloorCount: 300,
+      },
     },
   },
   losEpsilon: 0.05,

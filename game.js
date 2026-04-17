@@ -4,6 +4,7 @@ import { allWorldCells, buildWorldFromFixedDefinition, isFloor, setCurrentMapDat
 import { FIXED_MAPS, getFixedMapById } from './fixed-maps.js';
 import { createRng } from './rng.js';
 import { generateCaveMap } from './map-family-cave.js';
+import { generateNaturalCaveMap } from './map-family-cave-natural.js';
 import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
 import { render } from './render.js';
@@ -25,7 +26,7 @@ const state = {
   playerWt: 10,
   gameOver: false,
   enemies: [],
-  currentMapId: CONFIG.defaultFixedMapId,
+  currentMapId: CONFIG.defaultGeneratedMapId ?? CONFIG.defaultFixedMapId,
   currentMapName: '',
 };
 
@@ -327,10 +328,33 @@ function buildEnemiesFromDefinition(definition) {
   return buildEnemiesFromEntries(definition.enemies);
 }
 
-function buildGeneratedMapLabel() {
-  const family = state.config.generatedMap?.family ?? 'cave';
-  const seed = state.config.generatedMap?.seed ?? 12345;
-  return `Generated ${family} (seed:${seed})`;
+
+function getGeneratedPreset(mapId = null) {
+  const generatedMaps = state.config.generatedMaps ?? {};
+  const resolvedId = mapId ?? state.config.defaultGeneratedMapId;
+  return generatedMaps[resolvedId] ?? generatedMaps[state.config.defaultGeneratedMapId] ?? null;
+}
+
+function isGeneratedMapId(mapId) {
+  return Boolean(getGeneratedPreset(mapId));
+}
+
+function generateMapFromPreset(mapId) {
+  const preset = getGeneratedPreset(mapId);
+  if (!preset) {
+    throw new Error(`Unknown generated map preset: ${mapId}`);
+  }
+  const rng = createRng(preset.seed ?? 12345);
+  if (preset.family === 'cave_natural') {
+    return generateNaturalCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
+  }
+  return generateCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
+}
+
+function buildGeneratedMapLabel(mapId) {
+  const preset = getGeneratedPreset(mapId);
+  if (!preset) return 'Generated map';
+  return `${preset.label} (seed:${preset.seed ?? 12345})`;
 }
 
 function updateMapUi() {
@@ -340,8 +364,10 @@ function updateMapUi() {
     mapSelect.value = state.currentMapId;
   }
   if (mapMeta) {
-    if (state.currentMapId === 'generated_cave') {
-      mapMeta.textContent = '標準Cave生成を使用。半径40、連結掘削 + ふくらみ + 軽いループ追加。';
+    if (state.currentMapId === 'generated_cave_walk') {
+      mapMeta.textContent = '歩行掘削型Cave。連結掘削 + 控えめなふくらみ + 軽いループ追加。';
+    } else if (state.currentMapId === 'generated_cave_natural') {
+      mapMeta.textContent = '自然洞窟寄りCave。Cellular Automata で塊を作り、最大連結成分のみ採用。';
     } else {
       const definition = getFixedMapById(state.currentMapId);
       mapMeta.textContent = definition.description ?? '';
@@ -355,10 +381,12 @@ function setupMapUi() {
 
   mapSelect.innerHTML = '';
 
-  const generatedOption = document.createElement('option');
-  generatedOption.value = 'generated_cave';
-  generatedOption.textContent = buildGeneratedMapLabel();
-  mapSelect.appendChild(generatedOption);
+  for (const mapId of Object.keys(state.config.generatedMaps ?? {})) {
+    const option = document.createElement('option');
+    option.value = mapId;
+    option.textContent = buildGeneratedMapLabel(mapId);
+    mapSelect.appendChild(option);
+  }
 
   for (const map of FIXED_MAPS) {
     const option = document.createElement('option');
@@ -369,17 +397,14 @@ function setupMapUi() {
   updateMapUi();
 }
 
-function resetRunWithGeneratedMap({ keepLog = false } = {}) {
-  const generated = generateCaveMap({
-    radius: state.config.worldRadius,
-    rng: createRng(state.config.generatedMap?.seed ?? 12345),
-    params: state.config.generatedMap?.params ?? {},
-  });
+function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { keepLog = false } = {}) {
+  const generated = generateMapFromPreset(mapId);
+  const preset = getGeneratedPreset(mapId);
 
   setCurrentMapData({ floor: generated.floor });
 
-  state.currentMapId = 'generated_cave';
-  state.currentMapName = buildGeneratedMapLabel();
+  state.currentMapId = mapId;
+  state.currentMapName = buildGeneratedMapLabel(mapId);
   state.playerPos = new Hex(generated.playerStart.q, generated.playerStart.r);
   state.previewFacing = generated.playerStart.facing ?? 2;
   state.committedFacing = generated.playerStart.facing ?? 2;
@@ -400,8 +425,8 @@ function resetRunWithGeneratedMap({ keepLog = false } = {}) {
   updateMapUi();
   render(state);
 
-  pushLog('MAP', `${state.currentMapName} を生成。floor ${generated.meta.floorCount} / radius ${generated.meta.radius}。`);
-  pushLog('GEN', `floorRate ${generated.meta.params.floorRate}, loopiness ${generated.meta.params.loopiness}, chokeDensity ${generated.meta.params.chokeDensity}。`);
+  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / floor ${generated.meta.floorCount} / radius ${generated.meta.radius}。`);
+  pushLog('GEN', `${JSON.stringify(preset?.params ?? generated.meta.params)}`);
   pushLog('KEY', '← / → で回頭、Q/W/E/A/S/D = 左前 / 前 / 右前 / 左後 / 後 / 右後。');
 }
 
@@ -442,15 +467,15 @@ function bootstrap() {
     tryMove,
     waitAction,
     onSelectMap: (mapId) => {
-      if (mapId === 'generated_cave') {
-        resetRunWithGeneratedMap();
+      if (isGeneratedMapId(mapId)) {
+        resetRunWithGeneratedMap(mapId);
       } else {
         resetRunWithFixedMap(mapId);
       }
     },
     onResetMap: () => {
-      if (state.currentMapId === 'generated_cave') {
-        resetRunWithGeneratedMap();
+      if (isGeneratedMapId(state.currentMapId)) {
+        resetRunWithGeneratedMap(state.currentMapId);
       } else {
         resetRunWithFixedMap(state.currentMapId);
       }
@@ -459,11 +484,11 @@ function bootstrap() {
   bindKeyboard({ rotatePreview, tryMove });
   setupMapUi();
   if (CONFIG.defaultMapMode === 'generated') {
-    resetRunWithGeneratedMap({ keepLog: true });
+    resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true });
   } else {
     resetRunWithFixedMap(CONFIG.defaultFixedMapId, { keepLog: true });
   }
-  pushLog('INIT', 'Split Prototype を初期化。固定マップと生成Caveを切替可能。');
+  pushLog('INIT', 'Split Prototype を初期化。固定マップと複数の生成Caveを切替可能。');
   pushLog('LOS', '中心→中心を基準にし、境界曖昧ケースは 3 本線のうち 1 本でも通れば可視。');
   pushLog('FOV', 'プレイヤーも敵も前方120度FOV + LOS + 近接知覚で認識する。');
   pushLog('RULE', '回頭はゼロターンで情報を増やさず、移動や待機で初めて視界更新が走る。');
