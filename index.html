@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HEX版NetHack風ローグライク - Split Prototype</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app">
+    <section class="header">
+      <h1>HEX版NetHack風ローグライク - Split Prototype</h1>
+      <p>
+        Hex ロジック座標は <strong>q / r</strong> を用いる。向きは常に<strong>ヘックスの辺方向</strong>で表す。<br>
+        視覚は <strong>120度FOV + LOS</strong>、隣接 6 マスは <strong>近接知覚</strong> とする。<br>
+        回頭はゼロターンで情報を増やさない。移動・待機・攻撃などのターン経過時のみ視界更新する。<br>
+        敵AIは <strong>巡回 → 発見で追跡 → 見失い地点を確認 → 初期位置へ帰投</strong> の状態遷移を持つ。<br>
+        将来の光源 / 暗視拡張のため、知覚はプロファイル化してある。
+      </p>
+    </section>
+
+    <section class="views">
+      <div class="panel">
+        <h2>主画面 Canvas</h2>
+        <p>プレイヤー基準・仮向き追従。敵は可視時に向きも表示する。近接知覚時は存在だけ分かる。</p>
+        <canvas id="mainCanvas" width="520" height="520"></canvas>
+        <div class="legend">
+          <span class="chip"><span class="swatch" style="background:#06080b"></span>未知</span>
+          <span class="chip"><span class="swatch" style="background:#26313c"></span>既知の壁</span>
+          <span class="chip"><span class="swatch" style="background:#182430"></span>既知の床</span>
+          <span class="chip"><span class="swatch" style="background:#4d465f"></span>近接知覚の壁</span>
+          <span class="chip"><span class="swatch" style="background:#2a2940"></span>近接知覚の床</span>
+          <span class="chip"><span class="swatch" style="background:#3b4b5d"></span>可視の壁</span>
+          <span class="chip"><span class="swatch" style="background:#1f394f"></span>可視の床</span>
+          <span class="chip"><span class="swatch" style="background:#ffd166"></span>プレイヤー</span>
+          <span class="chip"><span class="swatch" style="background:#ff6b6b"></span>敵</span>
+          <span class="chip"><span class="swatch" style="background:#ff7b72"></span>向き矢印</span>
+          <span class="chip"><span class="swatch" style="background:#9be564"></span>仮向き / 視野軸</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>副画面 Canvas</h2>
+        <p>ノースアップ固定。全体配置と敵の向きを確認できる。</p>
+        <canvas id="subCanvas" width="520" height="520"></canvas>
+      </div>
+    </section>
+
+    <section class="footer-grid">
+      <div class="panel">
+        <h2>ログ欄</h2>
+        <p>今はデバッグ兼用。AI状態変化も一部出す。</p>
+        <div id="log" class="log"></div>
+      </div>
+
+      <div class="panel">
+        <h2>操作 / ステータス</h2>
+        <div class="control-stack">
+          <div class="status-box" id="statusBox"></div>
+          <div class="status-box" id="enemyStatusBox"></div>
+
+          <div class="status-box">
+            <div class="small" style="margin-bottom:8px;">マップ切替（生成 / 固定）</div>
+            <div class="map-tools">
+              <label for="mapSelect">Map</label>
+              <select id="mapSelect"></select>
+              <button id="resetMapBtn" type="button">Reset Map</button>
+            </div>
+            <div id="mapMeta" class="small"></div>
+          </div>
+
+          <div>
+            <div class="small" style="margin-bottom:8px;">回頭（ターン消費なし・主画面基準）</div>
+            <div class="rotate-controls">
+              <button id="rotateLeftBtn" type="button">回頭左</button>
+              <button id="rotateRightBtn" type="button">回頭右</button>
+            </div>
+          </div>
+
+          <div class="hex-pad-wrap">
+            <div class="small" style="margin-bottom:8px;">平行移動は主画面基準の 6 方向。敵がいれば移動ではなく攻撃になる。</div>
+            <div class="hex-pad">
+              <button class="hex-btn dir-2" data-local-move="0" type="button">↑ 前</button>
+              <button class="hex-btn dir-1" data-local-move="1" type="button">↗ 右前</button>
+              <button class="hex-btn dir-3" data-local-move="5" type="button">↖ 左前</button>
+              <button class="hex-btn dir-0" data-local-move="2" type="button">↘ 右後</button>
+              <button class="hex-btn dir-4" data-local-move="4" type="button">↙ 左後</button>
+              <button class="hex-btn dir-5" data-local-move="3" type="button">↓ 後</button>
+              <button class="wait-btn" id="waitBtn" type="button">待機</button>
+            </div>
+            <div class="control-note">
+              回頭は無料で、行動を確定した瞬間に仮向きが確定向きへ反映される。<br>
+              回頭だけでは情報は増えず、視界更新は移動や待機などのターン経過時にだけ行う。<br>
+              隣接6マスだけは、向きに関係なく近接知覚として常時把握する。<br>
+              キーボードは <strong>← / →</strong> で回頭、<strong>Q W E / A S D</strong> で <strong>左前 前 右前 / 左後 後 / 右後</strong> に移動する。
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script type="module" src="./game.js"></script>
+</body>
+</html>

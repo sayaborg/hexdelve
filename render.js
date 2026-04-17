@@ -1,0 +1,292 @@
+import { CONFIG } from './config.js';
+import {
+  DIRECTION_ANGLES_DEG,
+  DIRECTION_LABELS,
+  hexDistance,
+  hexToPixel,
+  polygonCorners,
+} from './hex.js';
+import { isFloor } from './map.js';
+
+function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
+  const corners = polygonCorners(centerX, centerY, size);
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  for (let i = 1; i < corners.length; i += 1) {
+    ctx.lineTo(corners[i].x, corners[i].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawLabel(ctx, x, y, text, color, fontSize = 11) {
+  ctx.fillStyle = color;
+  ctx.font = `${fontSize}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+}
+
+function drawFacingArrow(ctx, centerX, centerY, angleDeg, color, length) {
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const tipX = centerX + Math.cos(angleRad) * length;
+  const tipY = centerY + Math.sin(angleRad) * length;
+  const leftX = centerX + Math.cos(angleRad + 2.5) * (length * 0.38);
+  const leftY = centerY + Math.sin(angleRad + 2.5) * (length * 0.38);
+  const rightX = centerX + Math.cos(angleRad - 2.5) * (length * 0.38);
+  const rightY = centerY + Math.sin(angleRad - 2.5) * (length * 0.38);
+
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(leftX, leftY);
+  ctx.lineTo(rightX, rightY);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawEnemyMarker(ctx, centerX, centerY, visibleMode) {
+  const size = visibleMode === 'visible' ? 7 : 5;
+  const color = visibleMode === 'visible' ? CONFIG.colors.enemyVisible : CONFIG.colors.enemyNear;
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, size, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = '#2a0f12';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+}
+
+function drawEnemyFacing(ctx, centerX, centerY, facingDirection) {
+  drawFacingArrow(ctx, centerX, centerY, DIRECTION_ANGLES_DEG[facingDirection], '#ffe3e3', 12);
+}
+
+
+function aiModeBadge(mode) {
+  return {
+    patrol: '巡',
+    chase: '追',
+    investigate: '確',
+    return: '帰',
+  }[mode] ?? '?';
+}
+
+function drawEnemyStateBadge(ctx, centerX, centerY, mode, visibleMode) {
+  const text = aiModeBadge(mode);
+  const width = 18;
+  const height = 14;
+  const badgeX = centerX - width / 2;
+  const badgeY = centerY - 22;
+  ctx.fillStyle = visibleMode === 'visible' ? 'rgba(20,20,24,0.88)' : 'rgba(40,40,44,0.82)';
+  ctx.strokeStyle = '#cfd3da';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(badgeX, badgeY, width, height, 4);
+  ctx.fill();
+  ctx.stroke();
+  drawLabel(ctx, centerX, badgeY + height / 2 + 0.5, text, '#f5f7fa', 9);
+}
+
+function getCellPaint(cell, state) {
+  const key = cell.key();
+  const isVisible = state.visible.has(key);
+  const isNearAware = state.nearAware.has(key);
+  const isKnown = state.explored.has(key);
+  const floor = isFloor(cell);
+
+  if (!isKnown) {
+    return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
+  }
+  if (isVisible) {
+    return {
+      fill: floor ? CONFIG.colors.floorVisible : CONFIG.colors.wallVisible,
+      stroke: floor ? CONFIG.colors.floorVisibleStroke : CONFIG.colors.wallVisibleStroke,
+      label: floor ? `q:${cell.q} r:${cell.r}` : null,
+      labelColor: CONFIG.colors.text,
+    };
+  }
+  if (isNearAware) {
+    return {
+      fill: floor ? CONFIG.colors.floorNear : CONFIG.colors.wallNear,
+      stroke: floor ? CONFIG.colors.floorNearStroke : CONFIG.colors.wallNearStroke,
+      label: null,
+      labelColor: CONFIG.colors.muted,
+    };
+  }
+  return {
+    fill: floor ? CONFIG.colors.floorKnown : CONFIG.colors.wallKnown,
+    stroke: floor ? CONFIG.colors.floorKnownStroke : CONFIG.colors.wallKnownStroke,
+    label: null,
+    labelColor: CONFIG.colors.muted,
+  };
+}
+
+function drawCellBase(ctx, cell, drawHexCoord, tileRadius, originX, originY, labelSize, state) {
+  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+  const paint = getCellPaint(cell, state);
+  let fill = paint.fill;
+  let stroke = paint.stroke;
+
+  if (cell.equals(state.playerPos)) {
+    fill = CONFIG.colors.player;
+    stroke = '#c99f2f';
+  }
+
+  drawHex(ctx, pixel.x, pixel.y, tileRadius - 1, fill, stroke);
+  if (paint.label) {
+    drawLabel(ctx, pixel.x, pixel.y - 5, paint.label, paint.labelColor, labelSize);
+  }
+}
+
+function drawEntityOverlay(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+  const enemy = state.enemies.find((e) => e.pos.equals(cell));
+  if (!enemy) {
+    return;
+  }
+
+  const key = cell.key();
+  const mode = state.visible.has(key) ? 'visible' : (state.nearAware.has(key) ? 'near' : null);
+  if (!mode) {
+    return;
+  }
+
+  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+  drawEnemyMarker(ctx, pixel.x, pixel.y, mode);
+  drawEnemyStateBadge(ctx, pixel.x, pixel.y, enemy.mode, mode);
+  if (mode === 'visible') {
+    drawEnemyFacing(ctx, pixel.x, pixel.y, enemy.facing);
+    drawLabel(ctx, pixel.x, pixel.y + 14, `${enemy.hp}`, CONFIG.colors.text, 10);
+  }
+}
+
+export function updateStatusBox(state) {
+  const box = document.getElementById('statusBox');
+  box.innerHTML = `
+    <div class="status-row"><span>Turn</span><strong>${state.turn}</strong></div>
+    <div class="status-row"><span>HP</span><strong>${state.playerHP} / ${state.playerMaxHP}</strong></div>
+    <div class="status-row"><span>Player wt</span><strong>${state.playerWt}</strong></div>
+    <div class="status-row"><span>Map</span><strong>${state.currentMapName ?? state.currentMapId ?? '-'}</strong></div>
+    <div class="status-row"><span>Player q / r</span><strong>q:${state.playerPos.q} r:${state.playerPos.r}</strong></div>
+    <div class="status-row"><span>仮向き</span><strong>${DIRECTION_LABELS[state.previewFacing]}</strong></div>
+    <div class="status-row"><span>視界基準 / 確定向き</span><strong>${DIRECTION_LABELS[state.committedFacing]}</strong></div>
+    <div class="status-row"><span>可視セル数</span><strong>${state.visible.size}</strong></div>
+    <div class="status-row"><span>近接知覚セル数</span><strong>${state.nearAware.size}</strong></div>
+    <div class="status-row"><span>既知セル数</span><strong>${state.explored.size}</strong></div>
+    <div class="status-row"><span>残敵数</span><strong>${state.enemies.length}</strong></div>
+    <div class="status-row"><span>状態</span><strong>${state.gameOver ? 'GAME OVER' : '進行中'}</strong></div>
+  `;
+}
+
+export function updateEnemyStatusBox(state) {
+  const box = document.getElementById('enemyStatusBox');
+  if (state.enemies.length === 0) {
+    box.innerHTML = '<div class="small">敵は全滅。</div>';
+    return;
+  }
+
+  box.innerHTML = `<div class="small">敵ステータス（試用向けに全公開）</div>` + state.enemies.map((enemy) => `
+    <div class="enemy-row">
+      <div class="enemy-title"><span>${enemy.id} ${enemy.name}</span><span>${enemy.mode}</span></div>
+      <div class="status-row"><span>位置</span><strong>q:${enemy.pos.q} r:${enemy.pos.r}</strong></div>
+      <div class="status-row"><span>向き</span><strong>${DIRECTION_LABELS[enemy.facing]}</strong></div>
+      <div class="status-row"><span>HP</span><strong>${enemy.hp} / ${enemy.maxHp}</strong></div>
+      <div class="status-row"><span>wt</span><strong>${enemy.wt}</strong></div>
+      <div class="status-row"><span>帰投先</span><strong>q:${enemy.homePos.q} r:${enemy.homePos.r}</strong></div>
+      <div class="status-row"><span>最終発見地点</span><strong>${enemy.lastSeenPlayerPos ? `q:${enemy.lastSeenPlayerPos.q} r:${enemy.lastSeenPlayerPos.r}` : '-'}</strong></div>
+    </div>
+  `).join('');
+}
+
+export function renderMain(state) {
+  const canvas = document.getElementById('mainCanvas');
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  const originX = width / 2;
+  const originY = height / 2;
+  const rotationDeg = -90 - DIRECTION_ANGLES_DEG[state.previewFacing];
+  const cells = state.allWorldCells.filter((cell) => hexDistance(cell, state.playerPos) <= CONFIG.main.localRadius);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = CONFIG.colors.background;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.translate(originX, originY);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.translate(-originX, -originY);
+
+  for (const cell of cells) {
+    const drawHexCoord = cell.subtract(state.playerPos);
+    drawCellBase(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, 10, state);
+  }
+
+  for (const cell of cells) {
+    const drawHexCoord = cell.subtract(state.playerPos);
+    drawEntityOverlay(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
+  }
+
+  ctx.restore();
+  drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.preview, 46);
+  drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.committed, 28);
+  drawLabel(ctx, originX, originY + 58, '主画面中央 = プレイヤー位置', CONFIG.colors.muted, 12);
+}
+
+function computeSubTileRadius(state, width, height) {
+  const padding = 12;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (const cell of state.allWorldCells) {
+    const pixel = hexToPixel(cell, 1, 0, 0);
+    if (pixel.x < minX) minX = pixel.x;
+    if (pixel.x > maxX) maxX = pixel.x;
+    if (pixel.y < minY) minY = pixel.y;
+    if (pixel.y > maxY) maxY = pixel.y;
+  }
+
+  const widthUnits = (maxX - minX) + 2.2;
+  const heightUnits = (maxY - minY) + 1.9;
+  const fitted = Math.min((width - padding * 2) / widthUnits, (height - padding * 2) / heightUnits);
+  return Math.max(1.6, Math.min(CONFIG.sub.tileRadius, fitted));
+}
+
+export function renderSub(state) {
+  const canvas = document.getElementById('subCanvas');
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  const originX = width / 2;
+  const originY = height / 2;
+  const tileRadius = computeSubTileRadius(state, width, height);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = CONFIG.colors.background;
+  ctx.fillRect(0, 0, width, height);
+
+  for (const cell of state.allWorldCells) {
+    drawCellBase(ctx, cell, cell, tileRadius, originX, originY, 8, state);
+  }
+
+  for (const cell of state.allWorldCells) {
+    drawEntityOverlay(ctx, cell, cell, tileRadius, originX, originY, state);
+  }
+
+  const playerPixel = hexToPixel(state.playerPos, tileRadius, originX, originY);
+  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, Math.max(8, tileRadius * 2.2));
+  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.previewFacing], CONFIG.colors.preview, Math.max(5, tileRadius * 1.4));
+  drawLabel(ctx, playerPixel.x, playerPixel.y + Math.max(10, tileRadius * 2.3), 'player', CONFIG.colors.muted, Math.max(8, Math.min(11, tileRadius + 3)));
+}
+
+export function render(state) {
+  updateStatusBox(state);
+  updateEnemyStatusBox(state);
+  renderMain(state);
+  renderSub(state);
+}
