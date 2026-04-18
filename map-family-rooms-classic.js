@@ -111,6 +111,7 @@ function buildRoomConnectionCandidates(rooms) {
       const roomA = rooms[i];
       const roomB = rooms[j];
       const dist = hexDistance(roomA.center, roomB.center);
+
       candidates.push({
         id: `c${candidates.length}`,
         roomAId: roomA.id,
@@ -212,6 +213,7 @@ function assignDoorsToConnections(rooms, connections) {
 
     connection.doorA = pair.doorA;
     connection.doorB = pair.doorB;
+
     selectedDoors.push({
       connectionId: connection.id,
       roomAId: connection.roomAId,
@@ -240,6 +242,230 @@ function pickStartRoom(rooms) {
   }
 
   return best;
+}
+
+function isCorridorStepAllowed(hex, tiles, allowedRoomIds) {
+  const tile = tiles.get(hex.key());
+  if (!tile) return false;
+
+  if (tile.type === 'void') return true;
+  if (tile.regionType === 'corridor') return true;
+
+  if (tile.regionType === 'room') {
+    return allowedRoomIds.has(tile.roomId);
+  }
+
+  return false;
+}
+
+function buildGreedyStepCandidates(current, goal) {
+  const currentDist = hexDistance(current, goal);
+  const out = [];
+
+  for (let dir = 0; dir < HEX_DIRS.length; dir += 1) {
+    const d = HEX_DIRS[dir];
+    const next = new Hex(current.q + d.q, current.r + d.r);
+    const dist = hexDistance(next, goal);
+
+    if (dist < currentDist) {
+      out.push({ hex: next, dir, dist });
+    }
+  }
+
+  return out;
+}
+
+function angularDirDelta(a, b) {
+  if (a == null || b == null) return 0;
+  const raw = Math.abs(a - b);
+  return Math.min(raw, 6 - raw);
+}
+
+function sortStepCandidates(candidates, prevDir, variant = 'straight_first') {
+  const items = [...candidates];
+
+  items.sort((a, b) => {
+    if (a.dist !== b.dist) return a.dist - b.dist;
+
+    const da = angularDirDelta(a.dir, prevDir);
+    const db = angularDirDelta(b.dir, prevDir);
+
+    if (variant === 'straight_first') {
+      if (da !== db) return da - db;
+      return a.dir - b.dir;
+    }
+
+    if (variant === 'left_bias') {
+      if (da !== db) return da - db;
+      return a.dir - b.dir;
+    }
+
+    if (variant === 'right_bias') {
+      if (da !== db) return da - db;
+      return b.dir - a.dir;
+    }
+
+    return a.dir - b.dir;
+  });
+
+  return items;
+}
+
+function carveCorridorCellsBetween(startHex, goalHex, { tiles, allowedRoomIds, variant }) {
+  const path = [startHex];
+  const visited = new Set([startHex.key()]);
+  let current = startHex;
+  let prevDir = null;
+
+  const maxSteps = hexDistance(startHex, goalHex) + 24;
+
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (current.key() === goalHex.key()) {
+      return path;
+    }
+
+    let candidates = buildGreedyStepCandidates(current, goalHex);
+
+    candidates = candidates.filter((c) => {
+      if (visited.has(c.hex.key())) return false;
+      return isCorridorStepAllowed(c.hex, tiles, allowedRoomIds);
+    });
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    const sorted = sortStepCandidates(candidates, prevDir, variant);
+    const picked = sorted[0];
+
+    path.push(picked.hex);
+    visited.add(picked.hex.key());
+    current = picked.hex;
+    prevDir = picked.dir;
+  }
+
+  return null;
+}
+
+function tryBuildConnectionCorridor(connection, tiles) {
+  if (!connection.doorA || !connection.doorB) {
+    return {
+      success: false,
+      corridorId: connection.id,
+      cells: [],
+      variant: null,
+    };
+  }
+
+  const startHex = connection.doorA.outside;
+  const goalHex = connection.doorB.outside;
+  const allowedRoomIds = new Set([connection.roomAId, connection.roomBId]);
+  const variants = ['straight_first', 'left_bias', 'right_bias'];
+
+  for (const variant of variants) {
+    const cells = carveCorridorCellsBetween(startHex, goalHex, {
+      tiles,
+      allowedRoomIds,
+      variant,
+    });
+
+    if (cells && cells.length > 0) {
+      return {
+        success: true,
+        corridorId: connection.id,
+        cells,
+        variant,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    corridorId: connection.id,
+    cells: [],
+    variant: null,
+  };
+}
+
+function paintCorridorToTiles(tiles, corridorCells, corridorId) {
+  for (const cell of corridorCells) {
+    const tile = tiles.get(cell.key());
+    if (!tile) continue;
+
+    if (tile.regionType === 'room') {
+      continue;
+    }
+
+    tile.type = 'floor';
+    tile.regionType = 'corridor';
+    tile.corridorId = corridorId;
+  }
+}
+
+function carveAllConnectionCorridors(tiles, connections) {
+  const corridors = [];
+  const failedConnections = [];
+
+  for (const connection of connections) {
+    const result = tryBuildConnectionCorridor(connection, tiles);
+    corridors.push(result);
+
+    if (result.success) {
+      paintCorridorToTiles(tiles, result.cells, connection.id);
+    } else {
+      failedConnections.push(connection.id);
+    }
+  }
+
+  return { corridors, failedConnections };
+}
+
+function floodFillFloor(startHex, tiles) {
+  const visited = new Set();
+  const queue = [startHex];
+  visited.add(startHex.key());
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+
+    for (const d of HEX_DIRS) {
+      const next = new Hex(current.q + d.q, current.r + d.r);
+      const tile = tiles.get(next.key());
+      if (!tile) continue;
+      if (tile.type !== 'floor') continue;
+      if (visited.has(next.key())) continue;
+
+      visited.add(next.key());
+      queue.push(next);
+    }
+  }
+
+  return visited;
+}
+
+function validateRoomConnectivity(rooms, tiles, startRoomId) {
+  const startRoom = rooms.find((r) => r.id === startRoomId);
+
+  if (!startRoom) {
+    return {
+      reachableRoomIds: [],
+      unreachableRoomIds: rooms.map((r) => r.id),
+    };
+  }
+
+  const reached = floodFillFloor(startRoom.center, tiles);
+  const reachableRoomIds = [];
+  const unreachableRoomIds = [];
+
+  for (const room of rooms) {
+    if (reached.has(room.center.key())) {
+      reachableRoomIds.push(room.id);
+    } else {
+      unreachableRoomIds.push(room.id);
+    }
+  }
+
+  return { reachableRoomIds, unreachableRoomIds };
 }
 
 export function generateRoomsClassicMap({ radius, rng, params = {} }) {
@@ -285,9 +511,13 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
     rng,
     params.extraLoopCount ?? 2
   );
+
   const selectedDoors = assignDoorsToConnections(rooms, connections);
+  const { corridors, failedConnections } = carveAllConnectionCorridors(tiles, connections);
 
   const startRoom = pickStartRoom(rooms);
+  const connectivity = validateRoomConnectivity(rooms, tiles, startRoom?.id ?? null);
+
   const playerStart = startRoom
     ? { q: startRoom.center.q, r: startRoom.center.r, facing: 2 }
     : { q: 0, r: 0, facing: 2 };
@@ -310,6 +540,9 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
       connectionCandidates,
       connections,
       selectedDoors,
+      corridors,
+      failedConnections,
+      connectivity,
       startRoomId: startRoom?.id ?? null,
     },
   };

@@ -6,7 +6,7 @@ import {
   hexToPixel,
   polygonCorners,
 } from './hex.js';
-import { isFloor } from './map.js';
+import { getTile, isFloor } from './map.js';
 
 function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
   const corners = polygonCorners(centerX, centerY, size);
@@ -161,29 +161,38 @@ function getCellPaint(cell, state) {
   const isNearAware = state.nearAware.has(key);
   const isKnown = state.explored.has(key);
   const floor = isFloor(cell);
+  const tile = getTile(cell);
+  const isCorridor = tile?.regionType === 'corridor';
+
+  const corridorVisibleFill = '#6fe7d8';
+  const corridorVisibleStroke = '#2aa999';
+  const corridorNearFill = '#9beee4';
+  const corridorNearStroke = '#54bfb1';
+  const corridorKnownFill = '#bdf5ee';
+  const corridorKnownStroke = '#7cd6ca';
 
   if (!isKnown) {
     return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
   }
   if (isVisible) {
     return {
-      fill: floor ? CONFIG.colors.floorVisible : CONFIG.colors.wallVisible,
-      stroke: floor ? CONFIG.colors.floorVisibleStroke : CONFIG.colors.wallVisibleStroke,
+      fill: floor ? (isCorridor ? corridorVisibleFill : CONFIG.colors.floorVisible) : CONFIG.colors.wallVisible,
+      stroke: floor ? (isCorridor ? corridorVisibleStroke : CONFIG.colors.floorVisibleStroke) : CONFIG.colors.wallVisibleStroke,
       label: floor ? `q:${cell.q} r:${cell.r}` : null,
       labelColor: CONFIG.colors.text,
     };
   }
   if (isNearAware) {
     return {
-      fill: floor ? CONFIG.colors.floorNear : CONFIG.colors.wallNear,
-      stroke: floor ? CONFIG.colors.floorNearStroke : CONFIG.colors.wallNearStroke,
+      fill: floor ? (isCorridor ? corridorNearFill : CONFIG.colors.floorNear) : CONFIG.colors.wallNear,
+      stroke: floor ? (isCorridor ? corridorNearStroke : CONFIG.colors.floorNearStroke) : CONFIG.colors.wallNearStroke,
       label: null,
       labelColor: CONFIG.colors.muted,
     };
   }
   return {
-    fill: floor ? CONFIG.colors.floorKnown : CONFIG.colors.wallKnown,
-    stroke: floor ? CONFIG.colors.floorKnownStroke : CONFIG.colors.wallKnownStroke,
+    fill: floor ? (isCorridor ? corridorKnownFill : CONFIG.colors.floorKnown) : CONFIG.colors.wallKnown,
+    stroke: floor ? (isCorridor ? corridorKnownStroke : CONFIG.colors.floorKnownStroke) : CONFIG.colors.wallKnownStroke,
     label: null,
     labelColor: CONFIG.colors.muted,
   };
