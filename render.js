@@ -2,6 +2,8 @@ import { CONFIG } from './config.js';
 import {
   DIRECTION_ANGLES_DEG,
   DIRECTION_LABELS,
+  DIRECTIONS,
+  Hex,
   hexDistance,
   hexToPixel,
   polygonCorners,
@@ -168,7 +170,7 @@ function drawRoomBoundaryOverlayForCell(ctx, cell, drawHexCoord, tileRadius, ori
 
   const center = hexToPixel(drawHexCoord, tileRadius, originX, originY);
   for (let dir = 0; dir < 6; dir += 1) {
-    const delta = HEX_DIRS[dir];
+    const delta = DIRECTIONS[dir];
     const neighbor = state.tiles.get(new Hex(cell.q + delta.q, cell.r + delta.r).key());
     if (neighbor?.regionType === 'room' && neighbor?.roomId === tile.roomId) continue;
     drawDebugSideSegment(ctx, center.x, center.y, tileRadius, dir, 'rgba(90,210,255,0.96)', Math.max(1.5, tileRadius * 0.16));
