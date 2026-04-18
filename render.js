@@ -129,6 +129,39 @@ function drawDebugHexFill(ctx, centerX, centerY, size, fill, stroke = null) {
   }
 }
 
+const SIDE_CORNERS_BY_DIR = {
+  0: [0, 1],
+  1: [5, 0],
+  2: [4, 5],
+  3: [3, 4],
+  4: [2, 3],
+  5: [1, 2],
+};
+
+function getSideSegmentPoints(centerX, centerY, size, dir) {
+  const corners = polygonCorners(centerX, centerY, size);
+  const [aIndex, bIndex] = SIDE_CORNERS_BY_DIR[dir];
+  return [corners[aIndex], corners[bIndex]];
+}
+
+function getSideMidpoint(centerX, centerY, size, dir) {
+  const [a, b] = getSideSegmentPoints(centerX, centerY, size, dir);
+  return {
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  };
+}
+
+function drawDebugSideSegment(ctx, centerX, centerY, size, dir, color, width = 2) {
+  const [a, b] = getSideSegmentPoints(centerX, centerY, size, dir);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+}
+
 function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) {
   const debug = state.currentMapDebug ?? {};
   const rooms = debug.rooms ?? [];
@@ -145,20 +178,28 @@ function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) 
   }
 
   for (const room of rooms) {
-    for (const cell of room.edgeCells ?? []) {
+    const roomCellSet = new Set(room.cells.map((cell) => cell.key()));
+    for (const cell of room.boundaryCells ?? []) {
       const p = hexToPixel(cell, tileRadius, originX, originY);
-      drawDebugHexFill(ctx, p.x, p.y, Math.max(2, tileRadius - 1.5), 'rgba(90,210,255,0.22)', 'rgba(90,210,255,0.45)');
+      for (let dir = 0; dir < 6; dir += 1) {
+        const delta = HEX_DIRS[dir];
+        const nKey = new Hex(cell.q + delta.q, cell.r + delta.r).key();
+        if (roomCellSet.has(nKey)) continue;
+        drawDebugSideSegment(ctx, p.x, p.y, tileRadius, dir, 'rgba(90,210,255,0.92)', 2.2);
+      }
     }
-    for (const cell of room.vertexCells ?? []) {
-      const p = hexToPixel(cell, tileRadius, originX, originY);
-      const isDoor = selectedDoorKeys.has(cell.key());
-      drawDebugHexFill(
+
+    for (const vertex of room.vertexDoors ?? []) {
+      const p = hexToPixel(vertex.cell, tileRadius, originX, originY);
+      const marker = getSideMidpoint(p.x, p.y, tileRadius, vertex.dir);
+      const isDoor = selectedDoorKeys.has(vertex.cell.key());
+      drawDebugDot(
         ctx,
-        p.x,
-        p.y,
-        Math.max(2, tileRadius - 1.1),
-        isDoor ? 'rgba(255,110,110,0.42)' : 'rgba(255,196,96,0.36)',
-        isDoor ? 'rgba(255,120,120,0.82)' : 'rgba(255,214,120,0.78)'
+        marker.x,
+        marker.y,
+        isDoor ? Math.max(3.8, tileRadius * 0.22) : Math.max(3.1, tileRadius * 0.18),
+        isDoor ? 'rgba(255,88,88,0.96)' : 'rgba(255,196,96,0.96)',
+        isDoor ? 'rgba(120,20,20,0.95)' : 'rgba(110,78,18,0.95)'
       );
     }
   }
@@ -213,24 +254,7 @@ function getCellPaint(cell, state) {
   const corridorKnownFill = '#bdf5ee';
   const corridorKnownStroke = '#7cd6ca';
 
-  const roomRolePalette = {
-    edge: {
-      visibleFill: '#6dc8ff', visibleStroke: '#2e8fcb',
-      nearFill: '#9bddff', nearStroke: '#5eaed8',
-      knownFill: '#bfeaff', knownStroke: '#85c8e7',
-    },
-    vertex: {
-      visibleFill: '#ffcb72', visibleStroke: '#d5972d',
-      nearFill: '#ffd99b', nearStroke: '#d0a258',
-      knownFill: '#ffe7bf', knownStroke: '#ddb67a',
-    },
-    door: {
-      visibleFill: '#ff7f7f', visibleStroke: '#cc4a4a',
-      nearFill: '#ffaaaa', nearStroke: '#d17272',
-      knownFill: '#ffc7c7', knownStroke: '#dc9898',
-    },
-  };
-  const roomRole = roomRolePalette[boundaryRole] ?? null;
+  const roomRole = null;
 
   if (!isKnown) {
     return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
