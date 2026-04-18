@@ -204,6 +204,7 @@ function getCellPaint(cell, state) {
   const floor = isFloor(cell);
   const tile = getTile(cell);
   const isCorridor = tile?.regionType === 'corridor';
+  const boundaryRole = tile?.boundaryRole ?? null;
 
   const corridorVisibleFill = '#6fe7d8';
   const corridorVisibleStroke = '#2aa999';
@@ -212,28 +213,59 @@ function getCellPaint(cell, state) {
   const corridorKnownFill = '#bdf5ee';
   const corridorKnownStroke = '#7cd6ca';
 
+  const roomRolePalette = {
+    edge: {
+      visibleFill: '#6dc8ff', visibleStroke: '#2e8fcb',
+      nearFill: '#9bddff', nearStroke: '#5eaed8',
+      knownFill: '#bfeaff', knownStroke: '#85c8e7',
+    },
+    vertex: {
+      visibleFill: '#ffcb72', visibleStroke: '#d5972d',
+      nearFill: '#ffd99b', nearStroke: '#d0a258',
+      knownFill: '#ffe7bf', knownStroke: '#ddb67a',
+    },
+    door: {
+      visibleFill: '#ff7f7f', visibleStroke: '#cc4a4a',
+      nearFill: '#ffaaaa', nearStroke: '#d17272',
+      knownFill: '#ffc7c7', knownStroke: '#dc9898',
+    },
+  };
+  const roomRole = roomRolePalette[boundaryRole] ?? null;
+
   if (!isKnown) {
     return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
   }
   if (isVisible) {
     return {
-      fill: floor ? (isCorridor ? corridorVisibleFill : CONFIG.colors.floorVisible) : CONFIG.colors.wallVisible,
-      stroke: floor ? (isCorridor ? corridorVisibleStroke : CONFIG.colors.floorVisibleStroke) : CONFIG.colors.wallVisibleStroke,
+      fill: floor
+        ? (isCorridor ? corridorVisibleFill : roomRole?.visibleFill ?? CONFIG.colors.floorVisible)
+        : CONFIG.colors.wallVisible,
+      stroke: floor
+        ? (isCorridor ? corridorVisibleStroke : roomRole?.visibleStroke ?? CONFIG.colors.floorVisibleStroke)
+        : CONFIG.colors.wallVisibleStroke,
       label: floor ? `q:${cell.q} r:${cell.r}` : null,
       labelColor: CONFIG.colors.text,
     };
   }
   if (isNearAware) {
     return {
-      fill: floor ? (isCorridor ? corridorNearFill : CONFIG.colors.floorNear) : CONFIG.colors.wallNear,
-      stroke: floor ? (isCorridor ? corridorNearStroke : CONFIG.colors.floorNearStroke) : CONFIG.colors.wallNearStroke,
+      fill: floor
+        ? (isCorridor ? corridorNearFill : roomRole?.nearFill ?? CONFIG.colors.floorNear)
+        : CONFIG.colors.wallNear,
+      stroke: floor
+        ? (isCorridor ? corridorNearStroke : roomRole?.nearStroke ?? CONFIG.colors.floorNearStroke)
+        : CONFIG.colors.wallNearStroke,
       label: null,
       labelColor: CONFIG.colors.muted,
     };
   }
   return {
-    fill: floor ? (isCorridor ? corridorKnownFill : CONFIG.colors.floorKnown) : CONFIG.colors.wallKnown,
-    stroke: floor ? (isCorridor ? corridorKnownStroke : CONFIG.colors.floorKnownStroke) : CONFIG.colors.wallKnownStroke,
+    fill: floor
+      ? (isCorridor ? corridorKnownFill : roomRole?.knownFill ?? CONFIG.colors.floorKnown)
+      : CONFIG.colors.wallKnown,
+    stroke: floor
+      ? (isCorridor ? corridorKnownStroke : roomRole?.knownStroke ?? CONFIG.colors.floorKnownStroke)
+      : CONFIG.colors.wallKnownStroke,
     label: null,
     labelColor: CONFIG.colors.muted,
   };

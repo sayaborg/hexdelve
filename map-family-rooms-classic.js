@@ -104,12 +104,28 @@ function canPlaceRoom(cells, forbidden, radius) {
 }
 
 function paintRoomToTiles(tiles, room) {
+  const vertexKeys = new Set((room.vertexCells ?? []).map((c) => c.key()));
+  const edgeKeys = new Set((room.edgeCells ?? []).map((c) => c.key()));
+
   for (const cell of room.cells) {
     const tile = tiles.get(cell.key());
     if (!tile) continue;
     tile.type = 'floor';
     tile.regionType = 'room';
     tile.roomId = room.id;
+    tile.boundaryRole = 'interior';
+    if (edgeKeys.has(cell.key())) tile.boundaryRole = 'edge';
+    if (vertexKeys.has(cell.key())) tile.boundaryRole = 'vertex';
+  }
+}
+
+function markSelectedDoorTiles(tiles, selectedDoors) {
+  for (const entry of selectedDoors) {
+    for (const door of [entry.doorA, entry.doorB]) {
+      const tile = tiles.get(door.cell.key());
+      if (!tile) continue;
+      tile.boundaryRole = 'door';
+    }
   }
 }
 
@@ -132,30 +148,24 @@ function countRoomSideLengths(center, cells, limits) {
 }
 
 function buildRoomBoundaryMetadata(room) {
-  const cellSet = new Set(room.cells.map((c) => c.key()));
-  const vertexDoors = [];
+  const { center, limits } = room;
+  const vertexDoors = [
+    { roomId: room.id, kind: 'vertex', dir: 0, cell: new Hex(center.q + limits.xPos, center.r + (limits.zNeg - limits.xPos)) },
+    { roomId: room.id, kind: 'vertex', dir: 1, cell: new Hex(center.q + limits.xPos, center.r - limits.yNeg) },
+    { roomId: room.id, kind: 'vertex', dir: 2, cell: new Hex(center.q + (limits.yNeg - limits.zPos), center.r - limits.yNeg) },
+    { roomId: room.id, kind: 'vertex', dir: 3, cell: new Hex(center.q - limits.xNeg, center.r + (limits.xNeg - limits.zPos)) },
+    { roomId: room.id, kind: 'vertex', dir: 4, cell: new Hex(center.q - limits.xNeg, center.r + limits.yPos) },
+    { roomId: room.id, kind: 'vertex', dir: 5, cell: new Hex(center.q + (limits.zNeg - limits.yPos), center.r + limits.yPos) },
+  ];
 
-  for (let dir = 0; dir < 6; dir += 1) {
-    const delta = HEX_DIRS[dir];
-    let current = room.center;
-
-    while (true) {
-      const next = new Hex(current.q + delta.q, current.r + delta.r);
-      if (!cellSet.has(next.key())) break;
-      current = next;
-    }
-
-    const outside = new Hex(current.q + delta.q, current.r + delta.r);
-    vertexDoors.push({
-      roomId: room.id,
-      kind: 'vertex',
-      dir,
-      cell: current,
-      outside,
-    });
+  for (const door of vertexDoors) {
+    const delta = HEX_DIRS[door.dir];
+    door.outside = new Hex(door.cell.q + delta.q, door.cell.r + delta.r);
   }
 
-  const vertexKeySet = new Set(vertexDoors.map((d) => d.cell.key()));
+  const cellSet = new Set(room.cells.map((c) => c.key()));
+  const vertexDoorsFiltered = vertexDoors.filter((d) => cellSet.has(d.cell.key()));
+  const vertexKeySet = new Set(vertexDoorsFiltered.map((d) => d.cell.key()));
   const boundaryCells = [];
   const edgeCells = [];
 
@@ -176,8 +186,8 @@ function buildRoomBoundaryMetadata(room) {
   }
 
   return {
-    vertexDoors,
-    vertexCells: vertexDoors.map((d) => d.cell),
+    vertexDoors: vertexDoorsFiltered,
+    vertexCells: vertexDoorsFiltered.map((d) => d.cell),
     boundaryCells,
     edgeCells,
   };
@@ -651,6 +661,7 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
   );
 
   const selectedDoors = assignDoorsToConnections(rooms, connections);
+  markSelectedDoorTiles(tiles, selectedDoors);
   for (const connection of connections) {
     connection.stubLength = doorStubLength;
   }
