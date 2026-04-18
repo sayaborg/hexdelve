@@ -31,9 +31,12 @@ export const CONFIG = {
       seed: 20260419,
       params: {
         roomCount: 14,
-        roomRadiusMin: 2,
+        roomRadiusMin: 3,
         roomRadiusMax: 4,
         roomGap: 2,
+        sideJitter: 1,
+        minSideLength: 3,
+        doorStubLength: 2,
         extraLoopCount: 2,
         initialEnemyCount: 4,
       },

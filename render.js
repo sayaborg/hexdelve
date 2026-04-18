@@ -112,6 +112,23 @@ function drawDebugDot(ctx, x, y, radius, fill, stroke = null) {
   }
 }
 
+function drawDebugHexFill(ctx, centerX, centerY, size, fill, stroke = null) {
+  const corners = polygonCorners(centerX, centerY, size);
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  for (let i = 1; i < corners.length; i += 1) {
+    ctx.lineTo(corners[i].x, corners[i].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
 function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) {
   const debug = state.currentMapDebug ?? {};
   const rooms = debug.rooms ?? [];
@@ -121,6 +138,30 @@ function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) 
   if (!rooms.length) return;
 
   const roomById = new Map(rooms.map((room) => [room.id, room]));
+  const selectedDoorKeys = new Set();
+  for (const entry of selectedDoors) {
+    selectedDoorKeys.add(entry.doorA.cell.key());
+    selectedDoorKeys.add(entry.doorB.cell.key());
+  }
+
+  for (const room of rooms) {
+    for (const cell of room.edgeCells ?? []) {
+      const p = hexToPixel(cell, tileRadius, originX, originY);
+      drawDebugHexFill(ctx, p.x, p.y, Math.max(2, tileRadius - 1.5), 'rgba(90,210,255,0.22)', 'rgba(90,210,255,0.45)');
+    }
+    for (const cell of room.vertexCells ?? []) {
+      const p = hexToPixel(cell, tileRadius, originX, originY);
+      const isDoor = selectedDoorKeys.has(cell.key());
+      drawDebugHexFill(
+        ctx,
+        p.x,
+        p.y,
+        Math.max(2, tileRadius - 1.1),
+        isDoor ? 'rgba(255,110,110,0.42)' : 'rgba(255,196,96,0.36)',
+        isDoor ? 'rgba(255,120,120,0.82)' : 'rgba(255,214,120,0.78)'
+      );
+    }
+  }
 
   for (const connection of connections) {
     const roomA = roomById.get(connection.roomAId);

@@ -113,7 +113,25 @@ function paintRoomToTiles(tiles, room) {
   }
 }
 
-function buildVertexDoors(room) {
+function countRoomSideLengths(center, cells, limits) {
+  const counts = [0, 0, 0, 0, 0, 0];
+
+  for (const cell of cells) {
+    const dq = cell.q - center.q;
+    const dr = cell.r - center.r;
+    const ds = -dq - dr;
+    if (dq === limits.xPos) counts[0] += 1;
+    if (dr === limits.yPos) counts[1] += 1;
+    if (ds === limits.zPos) counts[2] += 1;
+    if (dq === -limits.xNeg) counts[3] += 1;
+    if (dr === -limits.yNeg) counts[4] += 1;
+    if (ds === -limits.zNeg) counts[5] += 1;
+  }
+
+  return counts;
+}
+
+function buildRoomBoundaryMetadata(room) {
   const cellSet = new Set(room.cells.map((c) => c.key()));
   const vertexDoors = [];
 
@@ -137,7 +155,32 @@ function buildVertexDoors(room) {
     });
   }
 
-  return vertexDoors;
+  const vertexKeySet = new Set(vertexDoors.map((d) => d.cell.key()));
+  const boundaryCells = [];
+  const edgeCells = [];
+
+  for (const cell of room.cells) {
+    let isBoundary = false;
+    for (const dir of HEX_DIRS) {
+      const n = new Hex(cell.q + dir.q, cell.r + dir.r);
+      if (!cellSet.has(n.key())) {
+        isBoundary = true;
+        break;
+      }
+    }
+    if (!isBoundary) continue;
+    boundaryCells.push(cell);
+    if (!vertexKeySet.has(cell.key())) {
+      edgeCells.push(cell);
+    }
+  }
+
+  return {
+    vertexDoors,
+    vertexCells: vertexDoors.map((d) => d.cell),
+    boundaryCells,
+    edgeCells,
+  };
 }
 
 function buildRoomConnectionCandidates(rooms) {
@@ -384,6 +427,30 @@ function carveCorridorCellsBetween(startHex, goalHex, { tiles, allowedRoomIds, v
   return null;
 }
 
+function buildStraightDoorStub(door, length) {
+  const delta = HEX_DIRS[door.dir];
+  const cells = [];
+  let current = door.cell;
+  for (let i = 0; i < length; i += 1) {
+    current = new Hex(current.q + delta.q, current.r + delta.r);
+    cells.push(current);
+  }
+  return cells;
+}
+
+function allCellsAllowed(cells, tiles, allowedRoomIds) {
+  return cells.every((cell) => isCorridorStepAllowed(cell, tiles, allowedRoomIds));
+}
+
+function appendUniqueCells(target, cells) {
+  const seen = new Set(target.map((c) => c.key()));
+  for (const cell of cells) {
+    if (seen.has(cell.key())) continue;
+    target.push(cell);
+    seen.add(cell.key());
+  }
+}
+
 function tryBuildConnectionCorridor(connection, tiles) {
   if (!connection.doorA || !connection.doorB) {
     return {
@@ -394,26 +461,45 @@ function tryBuildConnectionCorridor(connection, tiles) {
     };
   }
 
-  const startHex = connection.doorA.outside;
-  const goalHex = connection.doorB.outside;
   const allowedRoomIds = new Set([connection.roomAId, connection.roomBId]);
+  const stubLength = connection.stubLength ?? 2;
+  const stubA = buildStraightDoorStub(connection.doorA, stubLength);
+  const stubB = buildStraightDoorStub(connection.doorB, stubLength);
+
+  if (!allCellsAllowed(stubA, tiles, allowedRoomIds) || !allCellsAllowed(stubB, tiles, allowedRoomIds)) {
+    return {
+      success: false,
+      corridorId: connection.id,
+      cells: [],
+      variant: null,
+    };
+  }
+
+  const startHex = stubA[stubA.length - 1];
+  const goalHex = stubB[stubB.length - 1];
   const variants = ['straight_first', 'left_bias', 'right_bias'];
 
   for (const variant of variants) {
-    const cells = carveCorridorCellsBetween(startHex, goalHex, {
+    const midPath = carveCorridorCellsBetween(startHex, goalHex, {
       tiles,
       allowedRoomIds,
       variant,
     });
 
-    if (cells && cells.length > 0) {
-      return {
-        success: true,
-        corridorId: connection.id,
-        cells,
-        variant,
-      };
-    }
+    if (!midPath || midPath.length === 0) continue;
+
+    const cells = [];
+    appendUniqueCells(cells, stubA);
+    appendUniqueCells(cells, midPath.slice(1));
+    appendUniqueCells(cells, [...stubB].reverse().slice(1));
+
+    return {
+      success: true,
+      corridorId: connection.id,
+      cells,
+      variant,
+      stubLength,
+    };
   }
 
   return {
@@ -511,6 +597,8 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
   const roomRadiusMax = params.roomRadiusMax ?? 4;
   const roomGap = params.roomGap ?? 2;
   const sideJitter = params.sideJitter ?? 1;
+  const minSideLength = params.minSideLength ?? 3;
+  const doorStubLength = params.doorStubLength ?? 2;
 
   const tiles = initVoidTiles(radius);
   const rooms = [];
@@ -526,6 +614,8 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
     const limits = makeRoomLimits(baseRadius, sideJitter, rng);
     const center = randomWorldCell(radius, rng);
     const cells = buildIrregularHexRoomCells(center, limits);
+    const sideLengths = countRoomSideLengths(center, cells, limits);
+    if (sideLengths.some((n) => n < minSideLength)) continue;
     if (!canPlaceRoom(cells, forbidden, radius)) continue;
 
     const room = {
@@ -533,9 +623,14 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
       center,
       baseRadius,
       limits,
+      sideLengths,
       cells,
     };
-    room.vertexDoors = buildVertexDoors(room);
+    const boundaryMeta = buildRoomBoundaryMetadata(room);
+    room.vertexDoors = boundaryMeta.vertexDoors;
+    room.vertexCells = boundaryMeta.vertexCells;
+    room.boundaryCells = boundaryMeta.boundaryCells;
+    room.edgeCells = boundaryMeta.edgeCells;
 
     rooms.push(room);
     paintRoomToTiles(tiles, room);
@@ -556,6 +651,9 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
   );
 
   const selectedDoors = assignDoorsToConnections(rooms, connections);
+  for (const connection of connections) {
+    connection.stubLength = doorStubLength;
+  }
   const { corridors, failedConnections } = carveAllConnectionCorridors(tiles, connections);
 
   const startRoom = pickStartRoom(rooms);
