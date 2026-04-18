@@ -35,16 +35,42 @@ function randomWorldCell(radius, rng) {
   }
 }
 
-function buildHexRoomCells(center, roomRadius) {
+function makeRoomLimits(baseRadius, jitter, rng) {
+  const clampMin = 1;
+  return {
+    xPos: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+    xNeg: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+    yPos: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+    yNeg: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+    zPos: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+    zNeg: Math.max(clampMin, baseRadius + rng.int(-jitter, jitter)),
+  };
+}
+
+function buildIrregularHexRoomCells(center, limits) {
   const cells = [];
-  for (let dq = -roomRadius; dq <= roomRadius; dq += 1) {
-    for (let dr = -roomRadius; dr <= roomRadius; dr += 1) {
+  const maxRange = Math.max(
+    limits.xPos,
+    limits.xNeg,
+    limits.yPos,
+    limits.yNeg,
+    limits.zPos,
+    limits.zNeg
+  );
+
+  for (let dq = -maxRange; dq <= maxRange; dq += 1) {
+    for (let dr = -maxRange; dr <= maxRange; dr += 1) {
       const ds = -dq - dr;
-      const dist = Math.max(Math.abs(dq), Math.abs(dr), Math.abs(ds));
-      if (dist > roomRadius) continue;
+      if (dq > limits.xPos) continue;
+      if (dq < -limits.xNeg) continue;
+      if (dr > limits.yPos) continue;
+      if (dr < -limits.yNeg) continue;
+      if (ds > limits.zPos) continue;
+      if (ds < -limits.zNeg) continue;
       cells.push(new Hex(center.q + dq, center.r + dr));
     }
   }
+
   return cells;
 }
 
@@ -87,20 +113,31 @@ function paintRoomToTiles(tiles, room) {
   }
 }
 
-function buildRoomPerimeter(room) {
-  const roomCellSet = new Set(room.cells.map((c) => c.key()));
-  const perimeter = [];
+function buildVertexDoors(room) {
+  const cellSet = new Set(room.cells.map((c) => c.key()));
+  const vertexDoors = [];
 
-  for (const cell of room.cells) {
-    for (let dir = 0; dir < HEX_DIRS.length; dir += 1) {
-      const delta = HEX_DIRS[dir];
-      const outside = new Hex(cell.q + delta.q, cell.r + delta.r);
-      if (roomCellSet.has(outside.key())) continue;
-      perimeter.push({ roomId: room.id, cell, dir, outside });
+  for (let dir = 0; dir < 6; dir += 1) {
+    const delta = HEX_DIRS[dir];
+    let current = room.center;
+
+    while (true) {
+      const next = new Hex(current.q + delta.q, current.r + delta.r);
+      if (!cellSet.has(next.key())) break;
+      current = next;
     }
+
+    const outside = new Hex(current.q + delta.q, current.r + delta.r);
+    vertexDoors.push({
+      roomId: room.id,
+      kind: 'vertex',
+      dir,
+      cell: current,
+      outside,
+    });
   }
 
-  return perimeter;
+  return vertexDoors;
 }
 
 function buildRoomConnectionCandidates(rooms) {
@@ -184,14 +221,14 @@ function addExtraLoopConnections(baseConnections, candidates, rng, extraLoopCoun
   return [...baseConnections, ...loops];
 }
 
-function pickNearestDoorPair(roomA, roomB) {
+function pickNearestVertexDoorPair(roomA, roomB) {
   let best = null;
 
-  for (const edgeA of roomA.perimeter) {
-    for (const edgeB of roomB.perimeter) {
-      const dist = hexDistance(edgeA.outside, edgeB.outside);
+  for (const doorA of roomA.vertexDoors) {
+    for (const doorB of roomB.vertexDoors) {
+      const dist = hexDistance(doorA.outside, doorB.outside);
       if (!best || dist < best.distance) {
-        best = { distance: dist, doorA: edgeA, doorB: edgeB };
+        best = { distance: dist, doorA, doorB };
       }
     }
   }
@@ -208,7 +245,7 @@ function assignDoorsToConnections(rooms, connections) {
     const roomB = roomById.get(connection.roomBId);
     if (!roomA || !roomB) continue;
 
-    const pair = pickNearestDoorPair(roomA, roomB);
+    const pair = pickNearestVertexDoorPair(roomA, roomB);
     if (!pair) continue;
 
     connection.doorA = pair.doorA;
@@ -473,23 +510,33 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
   const roomRadiusMin = params.roomRadiusMin ?? 2;
   const roomRadiusMax = params.roomRadiusMax ?? 4;
   const roomGap = params.roomGap ?? 2;
+  const sideJitter = params.sideJitter ?? 1;
 
   const tiles = initVoidTiles(radius);
   const rooms = [];
   const forbidden = new Set();
 
   let tries = 0;
-  const maxTries = roomCount * 30;
+  const maxTries = roomCount * 40;
 
   while (rooms.length < roomCount && tries < maxTries) {
     tries += 1;
 
-    const roomRadius = rng.int(roomRadiusMin, roomRadiusMax);
+    const baseRadius = rng.int(roomRadiusMin, roomRadiusMax);
+    const limits = makeRoomLimits(baseRadius, sideJitter, rng);
     const center = randomWorldCell(radius, rng);
-    const cells = buildHexRoomCells(center, roomRadius);
+    const cells = buildIrregularHexRoomCells(center, limits);
     if (!canPlaceRoom(cells, forbidden, radius)) continue;
 
-    const room = { id: `r${rooms.length}`, center, radius: roomRadius, cells };
+    const room = {
+      id: `r${rooms.length}`,
+      center,
+      baseRadius,
+      limits,
+      cells,
+    };
+    room.vertexDoors = buildVertexDoors(room);
+
     rooms.push(room);
     paintRoomToTiles(tiles, room);
 
@@ -497,10 +544,6 @@ export function generateRoomsClassicMap({ radius, rng, params = {} }) {
     for (const key of padded) {
       forbidden.add(key);
     }
-  }
-
-  for (const room of rooms) {
-    room.perimeter = buildRoomPerimeter(room);
   }
 
   const connectionCandidates = buildRoomConnectionCandidates(rooms);
