@@ -1,3 +1,68 @@
-# Hexdelve
+# HEX Roguelike Split Prototype
 
-roguelike prototype
+ブラウザで動く、HEX版NetHack風ローグライクの試作プロトタイプ。
+
+## 起動方法
+
+ローカルに展開後、このフォルダで簡易サーバを立てる。
+
+```bash
+python -m http.server 8000
+```
+
+環境によっては `python3 -m http.server 8000` でもよい。
+
+その後、ブラウザで以下を開く。
+
+```text
+http://localhost:8000/
+```
+
+## 現在の実装
+
+- q / r 軸を明示した HEX 座標
+- 6方向平行移動
+- 回頭はゼロターン
+- 移動時 / 待機時のみ視界更新
+- 前方 120 度 FOV + LOS
+- LOS は 3 本線サンプリング
+- 隣接 6 マスの近接知覚
+- 敵も同じ知覚系を使用
+- 敵AIは巡回 / 追跡 / 見失い地点確認 / 帰投
+- 敵の向き / 状態表示
+- 固定テストマップ切替
+- 生成Caveマップ切替
+- Reset Map による即時再開
+
+## マップ切替
+
+右パネルの `Map` セレクトから以下を切り替え可能。
+
+- Generated cave (seed固定)
+- Corner Fear
+- Doorway Hall
+- Loop Recontact
+
+Generated cave は、半径40の世界に対して
+「連結掘削 → 控えめなふくらみ追加 → 軽いループ追加」で作る最初の自動生成実装である。
+固定マップは引き続き「怖さ」「索敵」「再接触」の検証用に残している。
+
+## 次段階の候補
+
+- 生成パラメータUI（seed / floorRate / loopiness）
+- 部屋寄り生成ファミリの追加
+- ゴール / 目的物の配置
+- 行動ログの整理
+- マップごとのクリア条件と評価ログ
+
+- 行動解決は 攻撃 → 移動 → 知覚更新。
+- 同一空きマスへの同時進入は wt の低い側が勝ち、同wtなら全員足踏み。
+
+## rooms_classic（試作第2段階）
+
+- `generated_rooms_classic` を追加
+- 正六角の room 群を配置
+- room center ベースの MST + extra loop を構築
+- perimeter から最寄り door pair を debug 計算
+- まだ corridor 掘削は未実装
+- 副画面に room graph / start room / selected door pair を overlay 表示

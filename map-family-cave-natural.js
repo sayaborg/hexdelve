@@ -150,19 +150,40 @@ function choosePlayerStart(tiles) {
 
 function chooseEnemySpawns(tiles, playerStart, rng) {
   const origin = new Hex(playerStart.q, playerStart.r);
-  const floors = collectFloorTiles(tiles).filter((tile) => {
-    const dist = hexDistance(origin, new Hex(tile.q, tile.r));
-    return dist >= 8 && dist <= 24;
-  });
-  const shuffled = rng.shuffle(floors);
+  const allFloors = collectFloorTiles(tiles).filter((tile) => !(tile.q === playerStart.q && tile.r === playerStart.r));
+  const bands = [
+    { minDist: 8, maxDist: 24, minSpacing: 6 },
+    { minDist: 6, maxDist: 28, minSpacing: 4 },
+    { minDist: 4, maxDist: 40, minSpacing: 0 },
+  ];
+
   const enemies = [];
-  for (const tile of shuffled) {
-    const pos = new Hex(tile.q, tile.r);
-    const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
-    if (tooClose) continue;
-    enemies.push({ id: `n${enemies.length + 1}`, name: 'Watcher', q: tile.q, r: tile.r, facing: rng.int(0, 5), profile: 'watcher', wt: 10 + enemies.length });
-    if (enemies.length >= 3) break;
+  const used = new Set();
+
+  for (const band of bands) {
+    const candidates = allFloors.filter((tile) => {
+      const dist = hexDistance(origin, new Hex(tile.q, tile.r));
+      return dist >= band.minDist && dist <= band.maxDist && !used.has(tileKey(tile.q, tile.r));
+    });
+    const shuffled = rng.shuffle(candidates);
+    for (const tile of shuffled) {
+      const pos = new Hex(tile.q, tile.r);
+      const tooClose = band.minSpacing > 0 && enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < band.minSpacing);
+      if (tooClose) continue;
+      enemies.push({
+        id: `n${enemies.length + 1}`,
+        name: 'Watcher',
+        q: tile.q,
+        r: tile.r,
+        facing: rng.int(0, 5),
+        profile: 'watcher',
+        wt: 10 + enemies.length,
+      });
+      used.add(tileKey(tile.q, tile.r));
+      if (enemies.length >= 3) return enemies;
+    }
   }
+
   return enemies;
 }
 

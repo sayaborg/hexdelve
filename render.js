@@ -91,6 +91,70 @@ function drawEnemyStateBadge(ctx, centerX, centerY, mode, visibleMode) {
   drawLabel(ctx, centerX, badgeY + height / 2 + 0.5, text, '#f5f7fa', 9);
 }
 
+function drawDebugLine(ctx, x1, y1, x2, y2, color, width = 1) {
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+}
+
+function drawDebugDot(ctx, x, y, radius, fill, stroke = null) {
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) {
+  const debug = state.currentMapDebug ?? {};
+  const rooms = debug.rooms ?? [];
+  const connections = debug.connections ?? [];
+  const selectedDoors = debug.selectedDoors ?? [];
+
+  if (!rooms.length) return;
+
+  const roomById = new Map(rooms.map((room) => [room.id, room]));
+
+  for (const connection of connections) {
+    const roomA = roomById.get(connection.roomAId);
+    const roomB = roomById.get(connection.roomBId);
+    if (!roomA || !roomB) continue;
+
+    const a = hexToPixel(roomA.center, tileRadius, originX, originY);
+    const b = hexToPixel(roomB.center, tileRadius, originX, originY);
+    drawDebugLine(ctx, a.x, a.y, b.x, b.y, 'rgba(120,190,255,0.55)', 1.2);
+  }
+
+  for (const room of rooms) {
+    const point = hexToPixel(room.center, tileRadius, originX, originY);
+    const isStart = room.id === debug.startRoomId;
+    drawDebugDot(
+      ctx,
+      point.x,
+      point.y,
+      isStart ? Math.max(4, tileRadius * 0.5) : Math.max(3, tileRadius * 0.38),
+      isStart ? 'rgba(255,220,120,0.95)' : 'rgba(120,220,255,0.9)',
+      '#0f141a'
+    );
+    drawLabel(ctx, point.x, point.y - Math.max(9, tileRadius * 1.2), room.id, '#d6edf8', Math.max(8, Math.min(11, tileRadius + 2)));
+  }
+
+  for (const entry of selectedDoors) {
+    const a = hexToPixel(entry.doorA.cell, tileRadius, originX, originY);
+    const b = hexToPixel(entry.doorB.cell, tileRadius, originX, originY);
+    drawDebugDot(ctx, a.x, a.y, Math.max(2.5, tileRadius * 0.28), 'rgba(255,120,120,0.95)', '#260a0a');
+    drawDebugDot(ctx, b.x, b.y, Math.max(2.5, tileRadius * 0.28), 'rgba(255,120,120,0.95)', '#260a0a');
+    drawDebugLine(ctx, a.x, a.y, b.x, b.y, 'rgba(255,120,120,0.45)', 1);
+  }
+}
+
 function getCellPaint(cell, state) {
   const key = cell.key();
   const isVisible = state.visible.has(key);
@@ -282,6 +346,10 @@ export function renderSub(state) {
   drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, Math.max(8, tileRadius * 2.2));
   drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.previewFacing], CONFIG.colors.preview, Math.max(5, tileRadius * 1.4));
   drawLabel(ctx, playerPixel.x, playerPixel.y + Math.max(10, tileRadius * 2.3), 'player', CONFIG.colors.muted, Math.max(8, Math.min(11, tileRadius + 3)));
+
+  if (state.currentMapMeta?.family === 'rooms_classic') {
+    drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY);
+  }
 }
 
 export function render(state) {

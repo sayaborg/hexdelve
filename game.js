@@ -5,6 +5,7 @@ import { FIXED_MAPS, getFixedMapById } from './fixed-maps.js';
 import { createRng } from './rng.js';
 import { generateCaveMap } from './map-family-cave.js';
 import { generateNaturalCaveMap } from './map-family-cave-natural.js';
+import { generateRoomsClassicMap } from './map-family-rooms-classic.js';
 import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
 import { render } from './render.js';
@@ -28,6 +29,8 @@ const state = {
   enemies: [],
   currentMapId: CONFIG.defaultGeneratedMapId ?? CONFIG.defaultFixedMapId,
   currentMapName: '',
+  currentMapMeta: {},
+  currentMapDebug: {},
 };
 
 function getLogElement() {
@@ -348,6 +351,9 @@ function generateMapFromPreset(mapId) {
   if (preset.family === 'cave_natural') {
     return generateNaturalCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
   }
+  if (preset.family === 'rooms_classic') {
+    return generateRoomsClassicMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
+  }
   return generateCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
 }
 
@@ -368,6 +374,8 @@ function updateMapUi() {
       mapMeta.textContent = '歩行掘削型Cave。連結掘削 + 控えめなふくらみ + 軽いループ追加。';
     } else if (state.currentMapId === 'generated_cave_natural') {
       mapMeta.textContent = '自然洞窟寄りCave。Cellular Automata で塊を作り、最大連結成分のみ採用。';
+    } else if (state.currentMapId === 'generated_rooms_classic') {
+      mapMeta.textContent = '古典ローグライク寄り。正六角部屋の room graph と door 候補を表示する段階。';
     } else {
       const definition = getFixedMapById(state.currentMapId);
       mapMeta.textContent = definition.description ?? '';
@@ -401,10 +409,15 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   const generated = generateMapFromPreset(mapId);
   const preset = getGeneratedPreset(mapId);
 
-  setCurrentMapData({ floor: generated.floor });
+  setCurrentMapData({
+    floor: generated.floor,
+    tiles: generated.tiles,
+  });
 
   state.currentMapId = mapId;
   state.currentMapName = buildGeneratedMapLabel(mapId);
+  state.currentMapMeta = generated.meta ?? {};
+  state.currentMapDebug = generated.debug ?? {};
   state.playerPos = new Hex(generated.playerStart.q, generated.playerStart.r);
   state.previewFacing = generated.playerStart.facing ?? 2;
   state.committedFacing = generated.playerStart.facing ?? 2;
@@ -425,7 +438,7 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   updateMapUi();
   render(state);
 
-  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / floor ${generated.meta.floorCount} / radius ${generated.meta.radius}。`);
+  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / floor ${generated.meta.floorCount ?? generated.floor.size} / radius ${generated.meta.radius}。`);
   pushLog('GEN', `${JSON.stringify(preset?.params ?? generated.meta.params)}`);
   pushLog('KEY', '← / → で回頭、Q/W/E/A/S/D = 左前 / 前 / 右前 / 左後 / 後 / 右後。');
 }
@@ -437,6 +450,8 @@ function resetRunWithFixedMap(mapId, { keepLog = false } = {}) {
 
   state.currentMapId = definition.id;
   state.currentMapName = definition.name;
+  state.currentMapMeta = {};
+  state.currentMapDebug = {};
   state.playerPos = new Hex(definition.playerStart.q, definition.playerStart.r);
   state.previewFacing = definition.playerStart.facing;
   state.committedFacing = definition.playerStart.facing;
