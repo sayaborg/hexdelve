@@ -104,7 +104,7 @@ function canPlaceRoom(cells, forbidden, radius) {
 }
 
 function paintRoomToTiles(tiles, room) {
-  const vertexKeys = new Set((room.vertexCells ?? []).map((c) => c.key()));
+  const vertexDirByKey = new Map((room.vertexDoors ?? []).map((door) => [door.cell.key(), door.dir]));
   const edgeKeys = new Set((room.edgeCells ?? []).map((c) => c.key()));
 
   for (const cell of room.cells) {
@@ -114,8 +114,12 @@ function paintRoomToTiles(tiles, room) {
     tile.regionType = 'room';
     tile.roomId = room.id;
     tile.boundaryRole = 'interior';
+    tile.vertexDir = null;
     if (edgeKeys.has(cell.key())) tile.boundaryRole = 'edge';
-    if (vertexKeys.has(cell.key())) tile.boundaryRole = 'vertex';
+    if (vertexDirByKey.has(cell.key())) {
+      tile.boundaryRole = 'vertex';
+      tile.vertexDir = vertexDirByKey.get(cell.key());
+    }
   }
 }
 

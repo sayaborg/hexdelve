@@ -162,6 +162,32 @@ function drawDebugSideSegment(ctx, centerX, centerY, size, dir, color, width = 2
   ctx.stroke();
 }
 
+function drawRoomBoundaryOverlayForCell(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+  const tile = state.tiles.get(cell.key());
+  if (!tile || tile.regionType !== 'room' || !tile.roomId) return;
+
+  const center = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+  for (let dir = 0; dir < 6; dir += 1) {
+    const delta = HEX_DIRS[dir];
+    const neighbor = state.tiles.get(new Hex(cell.q + delta.q, cell.r + delta.r).key());
+    if (neighbor?.regionType === 'room' && neighbor?.roomId === tile.roomId) continue;
+    drawDebugSideSegment(ctx, center.x, center.y, tileRadius, dir, 'rgba(90,210,255,0.96)', Math.max(1.5, tileRadius * 0.16));
+  }
+
+  if (typeof tile.vertexDir === 'number') {
+    const marker = getSideMidpoint(center.x, center.y, tileRadius, tile.vertexDir);
+    const isDoor = tile.boundaryRole === 'door';
+    drawDebugDot(
+      ctx,
+      marker.x,
+      marker.y,
+      isDoor ? Math.max(2.6, tileRadius * 0.22) : Math.max(2.1, tileRadius * 0.18),
+      isDoor ? 'rgba(255,88,88,0.98)' : 'rgba(255,196,96,0.98)',
+      isDoor ? 'rgba(120,20,20,0.98)' : 'rgba(110,78,18,0.98)'
+    );
+  }
+}
+
 function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) {
   const debug = state.currentMapDebug ?? {};
   const rooms = debug.rooms ?? [];
@@ -171,38 +197,6 @@ function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) 
   if (!rooms.length) return;
 
   const roomById = new Map(rooms.map((room) => [room.id, room]));
-  const selectedDoorKeys = new Set();
-  for (const entry of selectedDoors) {
-    selectedDoorKeys.add(entry.doorA.cell.key());
-    selectedDoorKeys.add(entry.doorB.cell.key());
-  }
-
-  for (const room of rooms) {
-    const roomCellSet = new Set(room.cells.map((cell) => cell.key()));
-    for (const cell of room.boundaryCells ?? []) {
-      const p = hexToPixel(cell, tileRadius, originX, originY);
-      for (let dir = 0; dir < 6; dir += 1) {
-        const delta = HEX_DIRS[dir];
-        const nKey = new Hex(cell.q + delta.q, cell.r + delta.r).key();
-        if (roomCellSet.has(nKey)) continue;
-        drawDebugSideSegment(ctx, p.x, p.y, tileRadius, dir, 'rgba(90,210,255,0.92)', 2.2);
-      }
-    }
-
-    for (const vertex of room.vertexDoors ?? []) {
-      const p = hexToPixel(vertex.cell, tileRadius, originX, originY);
-      const marker = getSideMidpoint(p.x, p.y, tileRadius, vertex.dir);
-      const isDoor = selectedDoorKeys.has(vertex.cell.key());
-      drawDebugDot(
-        ctx,
-        marker.x,
-        marker.y,
-        isDoor ? Math.max(3.8, tileRadius * 0.22) : Math.max(3.1, tileRadius * 0.18),
-        isDoor ? 'rgba(255,88,88,0.96)' : 'rgba(255,196,96,0.96)',
-        isDoor ? 'rgba(120,20,20,0.95)' : 'rgba(110,78,18,0.95)'
-      );
-    }
-  }
 
   for (const connection of connections) {
     const roomA = roomById.get(connection.roomAId);
@@ -395,6 +389,13 @@ export function renderMain(state) {
     drawCellBase(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, 10, state);
   }
 
+  if (state.currentMapMeta?.family === 'rooms_classic') {
+    for (const cell of cells) {
+      const drawHexCoord = cell.subtract(state.playerPos);
+      drawRoomBoundaryOverlayForCell(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
+    }
+  }
+
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
     drawEntityOverlay(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
@@ -442,6 +443,12 @@ export function renderSub(state) {
 
   for (const cell of state.allWorldCells) {
     drawCellBase(ctx, cell, cell, tileRadius, originX, originY, 8, state);
+  }
+
+  if (state.currentMapMeta?.family === 'rooms_classic') {
+    for (const cell of state.allWorldCells) {
+      drawRoomBoundaryOverlayForCell(ctx, cell, cell, tileRadius, originX, originY, state);
+    }
   }
 
   for (const cell of state.allWorldCells) {
