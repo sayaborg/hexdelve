@@ -95,14 +95,3 @@ export function setDoorState(hex, newState) {
   rebuildRuntimeCell(currentMapData, hex);
   return true;
 }
-
-// ===== 旧 API(Phase 7 で削除予定) =====
-// Phase 3 で全ての behavior / perception 呼び出しは canStandAt / blocksSightH に置換済み。
-// これらは外部(render.js 等)の後方互換のため一時的に残している。
-export function isFloor(hex) {
-  return canStandAt(hex);
-}
-
-export function isOpaque(hex) {
-  return blocksSightH(hex);
-}

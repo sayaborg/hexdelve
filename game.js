@@ -21,9 +21,9 @@ const state = {
   visible: new Set(),
   nearAware: new Set(),
   explored: new Set(),
-  playerHP: 8,
-  playerMaxHP: 8,
-  playerWt: 10,
+  playerHP: CONFIG.player.hp,
+  playerMaxHP: CONFIG.player.maxHp,
+  playerWt: CONFIG.player.wt,
   gameOver: false,
   enemies: [],
   currentMapId: CONFIG.defaultGeneratedMapId,
@@ -89,22 +89,24 @@ function removeDeadEnemies() {
 }
 
 function playerAttack(enemy, localMove) {
-  enemy.hp -= 1;
-  pushLog('ATK', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} の敵 ${enemy.name} を攻撃。1 ダメージ。残HP ${Math.max(enemy.hp, 0)}。`);
+  // ダメージは CONFIG.player.damage 参照(v0 は固定 1、SPEC §9.8)。
+  enemy.hp -= CONFIG.player.damage;
+  pushLog('ATK', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} の敵 ${enemy.name} を攻撃。${CONFIG.player.damage} ダメージ。残HP ${Math.max(enemy.hp, 0)}。`);
   if (enemy.hp <= 0) {
     pushLog('KILL', `${enemy.name} を倒した。`);
-    removeDeadEnemies();
+    // 除去は resolveAttackPhase 終了後に一括(相打ち原則のため、
+    // ここで除去すると同ターンの後続敵攻撃で find が null を返してしまう)。
   }
 }
 
 function enemyAttackPlayer(enemy) {
+  // 敵のダメージは敵 kind の damage 参照(watcher = 1)。
+  const damage = CONFIG.enemyKinds[enemy.kind]?.damage ?? 1;
   enemy.facing = bestFacingToward(enemy.pos, state.playerPos);
-  state.playerHP -= 1;
-  pushLog('DMG', `敵 ${enemy.name} が攻撃。プレイヤーは 1 ダメージ。残HP ${Math.max(state.playerHP, 0)}。`);
-  if (state.playerHP <= 0) {
-    state.gameOver = true;
-    pushLog('OVER', 'プレイヤーは倒れた。GAME OVER。');
-  }
+  state.playerHP -= damage;
+  pushLog('DMG', `敵 ${enemy.name} が攻撃。プレイヤーは ${damage} ダメージ。残HP ${Math.max(state.playerHP, 0)}。`);
+  // gameOver 判定は resolveAttackPhase の最後に一括(相打ち原則のため、
+  // ここで gameOver を立てると後続の敵攻撃がスキップされてしまう)。
 }
 
 function livingEnemies() {
@@ -208,8 +210,13 @@ function resolveMovePhase(playerPlan, enemyPlans) {
     for (const entry of group) {
       contestedLosers.add(entry.actorId);
     }
-    const labels = group.map((entry) => `${entry.actorType === 'player' ? 'P' : entry.actorId}(wt:${entry.wt})`).join(' / ');
-    pushLog('CLASH', `同一空きマス q:${group[0].target.q} r:${group[0].target.r} への進入競合。${labels} は同wtのため全員足踏み。`);
+    // プレイヤー関与なしの敵同士 CLASH は主ログに出さない。
+    // プレイヤーの壁ログなど他の情報と混在して混乱するため(ログ 1 ターン複数行の整理)。
+    const hasPlayer = group.some((entry) => entry.actorType === 'player');
+    if (hasPlayer) {
+      const labels = group.map((entry) => `${entry.actorType === 'player' ? 'P' : entry.actorId}(wt:${entry.wt})`).join(' / ');
+      pushLog('CLASH', `同一空きマス q:${group[0].target.q} r:${group[0].target.r} への進入競合。${labels} は同wtのため全員足踏み。`);
+    }
   }
 
   if (playerPlan.type === 'move' && playerPlan.target) {
@@ -232,18 +239,34 @@ function resolveMovePhase(playerPlan, enemyPlans) {
 }
 
 function resolveAttackPhase(playerPlan, enemyPlans) {
+  // 相打ち原則(SPEC §9.8, TURN_RULES §3.6):
+  //   意思決定時点で plan された攻撃は、主体がそのターン内で死亡しても全て発動する。
+  //   HP ≤ 0 や gameOver のチェックは攻撃フェーズ中は行わない。
+
+  // プレイヤー攻撃
   if (playerPlan.type === 'attack' && playerPlan.enemyId) {
     const enemy = state.enemies.find((entry) => entry.id === playerPlan.enemyId) || null;
-    if (enemy && enemy.hp > 0) {
+    if (enemy) {
       playerAttack(enemy, playerPlan.localMove);
     }
   }
 
+  // 敵攻撃(意思決定時点で plan を持っていた敵全員が発動)
   for (const plan of enemyPlans) {
     if (!plan || plan.type !== 'attack') continue;
     const enemy = state.enemies.find((entry) => entry.id === plan.enemyId) || null;
-    if (!enemy || enemy.hp <= 0 || state.gameOver) continue;
+    if (!enemy) continue;
     enemyAttackPlayer(enemy);
+  }
+
+  // 全攻撃解決後に死亡処理を一括で(SPEC §9.8, TURN_RULES §3.5)。
+  // 敵除去は移動フェーズ前に行うため、除去タイルは空きマスとして扱われる。
+  removeDeadEnemies();
+
+  // プレイヤー死亡判定
+  if (state.playerHP <= 0 && !state.gameOver) {
+    state.gameOver = true;
+    pushLog('OVER', 'プレイヤーは倒れた。GAME OVER。');
   }
 }
 
@@ -281,12 +304,17 @@ function tryMove(localMove) {
   if (currentFeature?.kind === 'stairs') {
     const stairsParams = currentFeature.params;
     if (heading === stairsParams.exitHeading) {
-      // pre-exit: 攻撃・移動フェーズをスキップして即フロア遷移。
-      // 意思決定時点の敵 plan は新フロアには持ち越さない(仕様上 enemies は全破棄)。
+      // pre-exit: 意思決定時点の敵攻撃を先に解決(相打ち原則)。
+      // フロア遷移後は敵が全て破棄されるため、遷移前に攻撃処理を済ませる必要がある。
       commitFacing();
       state.turn += 1;
       pushLog('STAIRS', `Turn ${state.turn}: ${stairsParams.verticalMode === 'up' ? '上り' : '下り'}階段を使用。`);
-      transitionFloor();
+      resolveAttackPhase({ type: 'wait' }, enemyPlans);
+      if (state.gameOver) {
+        render(state);
+      } else {
+        transitionFloor();
+      }
       return;
     }
     if (heading !== oppositeHeading(stairsParams.enterHeading)) {
