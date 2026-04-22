@@ -21,22 +21,48 @@ export class Hex {
   }
 }
 
-// q/r 軸ベースの世界方向
-// 0: ↘, 1: ↗, 2: ↑, 3: ↖, 4: ↙, 5: ↓
-export const DIRECTIONS = [
-  new Hex(1, 0),
-  new Hex(1, -1),
-  new Hex(0, -1),
-  new Hex(-1, 0),
-  new Hex(-1, 1),
-  new Hex(0, 1),
+// flat-top orientation、edge 0 = N(上)、時計回り(GLOSSARY §1)
+// heading と edgeIndex は番号規則共通。
+//   0: N(↑)  1: NE(↗)  2: SE(↘)  3: S(↓)  4: SW(↙)  5: NW(↖)
+export const EDGE_DIRECTIONS = [
+  new Hex(0, -1),   // 0: N
+  new Hex(1, -1),   // 1: NE
+  new Hex(1, 0),    // 2: SE
+  new Hex(0, 1),    // 3: S
+  new Hex(-1, 1),   // 4: SW
+  new Hex(-1, 0),   // 5: NW
 ];
 
-export const DIRECTION_LABELS = ['↘ 0', '↗ 1', '↑ 2', '↖ 3', '↙ 4', '↓ 5'];
-export const DIRECTION_ANGLES_DEG = [30, -30, -90, -150, 150, 90];
+// 画面上の角度(度、+x が 0°、+y が 90°。画面 y 軸は下向き → -90° は画面上向き)
+export const HEADING_ANGLES_DEG = [-90, -30, 30, 90, 150, -150];
 
-export function getNeighbor(hex, direction) {
-  return hex.add(DIRECTIONS[direction]);
+export const HEADING_LABELS = ['↑ 0 N', '↗ 1 NE', '↘ 2 SE', '↓ 3 S', '↙ 4 SW', '↖ 5 NW'];
+
+// vertex N = edge N と edge (N+1) mod 6 の間の頂点(GLOSSARY §1)
+// タイル中心から size=1 の単位で、polygonCorners と同じ極座標系で表したオフセット。
+//   0: NE 寄り(-60°)  1: E(0°)   2: SE 寄り(60°)
+//   3: SW 寄り(120°)  4: W(180°) 5: NW 寄り(-120°)
+// v0 では未使用だが schema として用意。
+const SQRT3_HALF = Math.sqrt(3) / 2;
+export const VERTEX_OFFSETS = [
+  { x:  0.5, y: -SQRT3_HALF }, // 0: NE 寄り
+  { x:  1.0, y:  0          }, // 1: E
+  { x:  0.5, y:  SQRT3_HALF }, // 2: SE 寄り
+  { x: -0.5, y:  SQRT3_HALF }, // 3: SW 寄り
+  { x: -1.0, y:  0          }, // 4: W
+  { x: -0.5, y: -SQRT3_HALF }, // 5: NW 寄り
+];
+
+export function oppositeHeading(heading) {
+  return (heading + 3) % 6;
+}
+
+export function oppositeEdge(edgeIndex) {
+  return (edgeIndex + 3) % 6;
+}
+
+export function getNeighbor(hex, heading) {
+  return hex.add(EDGE_DIRECTIONS[heading]);
 }
 
 export function cubeS(hex) {

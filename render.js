@@ -1,12 +1,12 @@
 import { CONFIG } from './config.js';
 import {
-  DIRECTION_ANGLES_DEG,
-  DIRECTION_LABELS,
+  HEADING_ANGLES_DEG,
+  HEADING_LABELS,
   hexDistance,
   hexToPixel,
   polygonCorners,
 } from './hex.js';
-import { getTile, isFloor } from './map.js';
+import { canStandAt, getFeature, getSourceCellAt } from './map.js';
 
 function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
   const corners = polygonCorners(centerX, centerY, size);
@@ -61,8 +61,8 @@ function drawEnemyMarker(ctx, centerX, centerY, visibleMode) {
   ctx.stroke();
 }
 
-function drawEnemyFacing(ctx, centerX, centerY, facingDirection) {
-  drawFacingArrow(ctx, centerX, centerY, DIRECTION_ANGLES_DEG[facingDirection], '#ffe3e3', 12);
+function drawEnemyFacing(ctx, centerX, centerY, facing) {
+  drawFacingArrow(ctx, centerX, centerY, HEADING_ANGLES_DEG[facing], '#ffe3e3', 12);
 }
 
 
@@ -91,109 +91,42 @@ function drawEnemyStateBadge(ctx, centerX, centerY, mode, visibleMode) {
   drawLabel(ctx, centerX, badgeY + height / 2 + 0.5, text, '#f5f7fa', 9);
 }
 
-function drawDebugLine(ctx, x1, y1, x2, y2, color, width = 1) {
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = width;
-  ctx.stroke();
-}
+function getSemanticPalette(sourceCell, feature, canStand, mode) {
+  const palettes = {
+    visible: {
+      room: { fill: CONFIG.colors.floorVisible, stroke: CONFIG.colors.floorVisibleStroke },
+      corridor: { fill: '#25516c', stroke: '#3c6f90' },
+      threshold: { fill: '#436177', stroke: '#6a8ba3' },
+      wall: { fill: CONFIG.colors.wallVisible, stroke: CONFIG.colors.wallVisibleStroke },
+      doorClosed: { fill: '#6a5531', stroke: '#b59554' },
+      doorOpen: { fill: '#2f6a5a', stroke: '#61a890' },
+    },
+    near: {
+      room: { fill: CONFIG.colors.floorNear, stroke: CONFIG.colors.floorNearStroke },
+      corridor: { fill: '#353357', stroke: '#55537b' },
+      threshold: { fill: '#4a5165', stroke: '#727a92' },
+      wall: { fill: CONFIG.colors.wallNear, stroke: CONFIG.colors.wallNearStroke },
+      doorClosed: { fill: '#62513b', stroke: '#8f7756' },
+      doorOpen: { fill: '#31584e', stroke: '#4d8274' },
+    },
+    known: {
+      room: { fill: CONFIG.colors.floorKnown, stroke: CONFIG.colors.floorKnownStroke },
+      corridor: { fill: '#1d3040', stroke: '#33495d' },
+      threshold: { fill: '#2a3a47', stroke: '#445563' },
+      wall: { fill: CONFIG.colors.wallKnown, stroke: CONFIG.colors.wallKnownStroke },
+      doorClosed: { fill: '#544633', stroke: '#7b6a50' },
+      doorOpen: { fill: '#25483f', stroke: '#416a5f' },
+    },
+  };
 
-function drawDebugDot(ctx, x, y, radius, fill, stroke = null) {
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = fill;
-  ctx.fill();
-  if (stroke) {
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 1;
-    ctx.stroke();
+  const palette = palettes[mode];
+  if (feature?.kind === 'door') {
+    return feature.state === 'open' ? palette.doorOpen : palette.doorClosed;
   }
-}
-
-function drawDebugHexFill(ctx, centerX, centerY, size, fill, stroke = null) {
-  const corners = polygonCorners(centerX, centerY, size);
-  ctx.beginPath();
-  ctx.moveTo(corners[0].x, corners[0].y);
-  for (let i = 1; i < corners.length; i += 1) {
-    ctx.lineTo(corners[i].x, corners[i].y);
-  }
-  ctx.closePath();
-  ctx.fillStyle = fill;
-  ctx.fill();
-  if (stroke) {
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-}
-
-function drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY) {
-  const debug = state.currentMapDebug ?? {};
-  const rooms = debug.rooms ?? [];
-  const connections = debug.connections ?? [];
-  const selectedDoors = debug.selectedDoors ?? [];
-
-  if (!rooms.length) return;
-
-  const roomById = new Map(rooms.map((room) => [room.id, room]));
-  const selectedDoorKeys = new Set();
-  for (const entry of selectedDoors) {
-    selectedDoorKeys.add(entry.doorA.cell.key());
-    selectedDoorKeys.add(entry.doorB.cell.key());
-  }
-
-  for (const room of rooms) {
-    for (const cell of room.edgeCells ?? []) {
-      const point = hexToPixel(cell, tileRadius, originX, originY);
-      drawDebugHexFill(ctx, point.x, point.y, Math.max(2, tileRadius - 1.6), 'rgba(90,210,255,0.24)', 'rgba(90,210,255,0.55)');
-    }
-    for (const cell of room.vertexCells ?? []) {
-      const point = hexToPixel(cell, tileRadius, originX, originY);
-      const isDoor = selectedDoorKeys.has(cell.key());
-      drawDebugHexFill(
-        ctx,
-        point.x,
-        point.y,
-        Math.max(2, tileRadius - 1.1),
-        isDoor ? 'rgba(255,110,110,0.42)' : 'rgba(255,196,96,0.34)',
-        isDoor ? 'rgba(255,120,120,0.82)' : 'rgba(255,214,120,0.78)'
-      );
-    }
-  }
-
-  for (const connection of connections) {
-    const roomA = roomById.get(connection.roomAId);
-    const roomB = roomById.get(connection.roomBId);
-    if (!roomA || !roomB) continue;
-
-    const a = hexToPixel(roomA.center, tileRadius, originX, originY);
-    const b = hexToPixel(roomB.center, tileRadius, originX, originY);
-    drawDebugLine(ctx, a.x, a.y, b.x, b.y, 'rgba(120,190,255,0.55)', 1.2);
-  }
-
-  for (const room of rooms) {
-    const point = hexToPixel(room.center, tileRadius, originX, originY);
-    const isStart = room.id === debug.startRoomId;
-    drawDebugDot(
-      ctx,
-      point.x,
-      point.y,
-      isStart ? Math.max(4, tileRadius * 0.5) : Math.max(3, tileRadius * 0.38),
-      isStart ? 'rgba(255,220,120,0.95)' : 'rgba(120,220,255,0.9)',
-      '#0f141a'
-    );
-    drawLabel(ctx, point.x, point.y - Math.max(9, tileRadius * 1.2), room.id, '#d6edf8', Math.max(8, Math.min(11, tileRadius + 2)));
-  }
-
-  for (const entry of selectedDoors) {
-    const a = hexToPixel(entry.doorA.cell, tileRadius, originX, originY);
-    const b = hexToPixel(entry.doorB.cell, tileRadius, originX, originY);
-    drawDebugDot(ctx, a.x, a.y, Math.max(2.5, tileRadius * 0.28), 'rgba(255,120,120,0.95)', '#260a0a');
-    drawDebugDot(ctx, b.x, b.y, Math.max(2.5, tileRadius * 0.28), 'rgba(255,120,120,0.95)', '#260a0a');
-    drawDebugLine(ctx, a.x, a.y, b.x, b.y, 'rgba(255,120,120,0.45)', 1);
-  }
+  if (!sourceCell || !canStand) return palette.wall;
+  if (sourceCell.structureKind === 'corridor') return palette.corridor;
+  if (sourceCell.structureKind === 'threshold') return palette.threshold;
+  return palette.room;
 }
 
 function getCellPaint(cell, state) {
@@ -201,41 +134,23 @@ function getCellPaint(cell, state) {
   const isVisible = state.visible.has(key);
   const isNearAware = state.nearAware.has(key);
   const isKnown = state.explored.has(key);
-  const floor = isFloor(cell);
-  const tile = getTile(cell);
-  const isCorridor = tile?.regionType === 'corridor';
-
-  const corridorVisibleFill = '#6fe7d8';
-  const corridorVisibleStroke = '#2aa999';
-  const corridorNearFill = '#9beee4';
-  const corridorNearStroke = '#54bfb1';
-  const corridorKnownFill = '#bdf5ee';
-  const corridorKnownStroke = '#7cd6ca';
+  const canStand = canStandAt(cell);
+  const sourceCell = getSourceCellAt(cell);
+  const feature = getFeature(cell);
 
   if (!isKnown) {
     return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
   }
-  if (isVisible) {
-    return {
-      fill: floor ? (isCorridor ? corridorVisibleFill : CONFIG.colors.floorVisible) : CONFIG.colors.wallVisible,
-      stroke: floor ? (isCorridor ? corridorVisibleStroke : CONFIG.colors.floorVisibleStroke) : CONFIG.colors.wallVisibleStroke,
-      label: floor ? `q:${cell.q} r:${cell.r}` : null,
-      labelColor: CONFIG.colors.text,
-    };
-  }
-  if (isNearAware) {
-    return {
-      fill: floor ? (isCorridor ? corridorNearFill : CONFIG.colors.floorNear) : CONFIG.colors.wallNear,
-      stroke: floor ? (isCorridor ? corridorNearStroke : CONFIG.colors.floorNearStroke) : CONFIG.colors.wallNearStroke,
-      label: null,
-      labelColor: CONFIG.colors.muted,
-    };
-  }
+
+  const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
+  const palette = getSemanticPalette(sourceCell, feature, canStand, mode);
+  const label = isVisible && feature?.kind === 'door' ? 'D' : null;
+  const labelColor = mode === 'visible' ? CONFIG.colors.text : CONFIG.colors.muted;
   return {
-    fill: floor ? (isCorridor ? corridorKnownFill : CONFIG.colors.floorKnown) : CONFIG.colors.wallKnown,
-    stroke: floor ? (isCorridor ? corridorKnownStroke : CONFIG.colors.floorKnownStroke) : CONFIG.colors.wallKnownStroke,
-    label: null,
-    labelColor: CONFIG.colors.muted,
+    fill: palette.fill,
+    stroke: palette.stroke,
+    label,
+    labelColor,
   };
 }
 
@@ -285,8 +200,8 @@ export function updateStatusBox(state) {
     <div class="status-row"><span>Player wt</span><strong>${state.playerWt}</strong></div>
     <div class="status-row"><span>Map</span><strong>${state.currentMapName ?? state.currentMapId ?? '-'}</strong></div>
     <div class="status-row"><span>Player q / r</span><strong>q:${state.playerPos.q} r:${state.playerPos.r}</strong></div>
-    <div class="status-row"><span>仮向き</span><strong>${DIRECTION_LABELS[state.previewFacing]}</strong></div>
-    <div class="status-row"><span>視界基準 / 確定向き</span><strong>${DIRECTION_LABELS[state.committedFacing]}</strong></div>
+    <div class="status-row"><span>仮向き</span><strong>${HEADING_LABELS[state.previewFacing]}</strong></div>
+    <div class="status-row"><span>視界基準 / 確定向き</span><strong>${HEADING_LABELS[state.committedFacing]}</strong></div>
     <div class="status-row"><span>可視セル数</span><strong>${state.visible.size}</strong></div>
     <div class="status-row"><span>近接知覚セル数</span><strong>${state.nearAware.size}</strong></div>
     <div class="status-row"><span>既知セル数</span><strong>${state.explored.size}</strong></div>
@@ -306,7 +221,7 @@ export function updateEnemyStatusBox(state) {
     <div class="enemy-row">
       <div class="enemy-title"><span>${enemy.id} ${enemy.name}</span><span>${enemy.mode}</span></div>
       <div class="status-row"><span>位置</span><strong>q:${enemy.pos.q} r:${enemy.pos.r}</strong></div>
-      <div class="status-row"><span>向き</span><strong>${DIRECTION_LABELS[enemy.facing]}</strong></div>
+      <div class="status-row"><span>向き</span><strong>${HEADING_LABELS[enemy.facing]}</strong></div>
       <div class="status-row"><span>HP</span><strong>${enemy.hp} / ${enemy.maxHp}</strong></div>
       <div class="status-row"><span>wt</span><strong>${enemy.wt}</strong></div>
       <div class="status-row"><span>帰投先</span><strong>q:${enemy.homePos.q} r:${enemy.homePos.r}</strong></div>
@@ -322,7 +237,7 @@ export function renderMain(state) {
   const height = canvas.height;
   const originX = width / 2;
   const originY = height / 2;
-  const rotationDeg = -90 - DIRECTION_ANGLES_DEG[state.previewFacing];
+  const rotationDeg = -90 - HEADING_ANGLES_DEG[state.previewFacing];
   const cells = state.allWorldCells.filter((cell) => hexDistance(cell, state.playerPos) <= CONFIG.main.localRadius);
 
   ctx.clearRect(0, 0, width, height);
@@ -350,27 +265,6 @@ export function renderMain(state) {
   drawLabel(ctx, originX, originY + 58, '主画面中央 = プレイヤー位置', CONFIG.colors.muted, 12);
 }
 
-function computeSubTileRadius(state, width, height) {
-  const padding = 12;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-
-  for (const cell of state.allWorldCells) {
-    const pixel = hexToPixel(cell, 1, 0, 0);
-    if (pixel.x < minX) minX = pixel.x;
-    if (pixel.x > maxX) maxX = pixel.x;
-    if (pixel.y < minY) minY = pixel.y;
-    if (pixel.y > maxY) maxY = pixel.y;
-  }
-
-  const widthUnits = (maxX - minX) + 2.2;
-  const heightUnits = (maxY - minY) + 1.9;
-  const fitted = Math.min((width - padding * 2) / widthUnits, (height - padding * 2) / heightUnits);
-  return Math.max(1.6, Math.min(CONFIG.sub.tileRadius, fitted));
-}
-
 export function renderSub(state) {
   const canvas = document.getElementById('subCanvas');
   const ctx = canvas.getContext('2d');
@@ -378,7 +272,7 @@ export function renderSub(state) {
   const height = canvas.height;
   const originX = width / 2;
   const originY = height / 2;
-  const tileRadius = computeSubTileRadius(state, width, height);
+  const tileRadius = CONFIG.sub.tileRadius;
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = CONFIG.colors.background;
@@ -393,13 +287,9 @@ export function renderSub(state) {
   }
 
   const playerPixel = hexToPixel(state.playerPos, tileRadius, originX, originY);
-  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, Math.max(8, tileRadius * 2.2));
-  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, DIRECTION_ANGLES_DEG[state.previewFacing], CONFIG.colors.preview, Math.max(5, tileRadius * 1.4));
-  drawLabel(ctx, playerPixel.x, playerPixel.y + Math.max(10, tileRadius * 2.3), 'player', CONFIG.colors.muted, Math.max(8, Math.min(11, tileRadius + 3)));
-
-  if (state.currentMapMeta?.family === 'rooms_classic') {
-    drawRoomsClassicDebugOverlay(ctx, state, tileRadius, originX, originY);
-  }
+  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, HEADING_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, tileRadius * 2.2);
+  drawFacingArrow(ctx, playerPixel.x, playerPixel.y, HEADING_ANGLES_DEG[state.previewFacing], CONFIG.colors.preview, tileRadius * 1.4);
+  drawLabel(ctx, playerPixel.x, playerPixel.y + tileRadius * 2.3, 'player', CONFIG.colors.muted, Math.min(11, tileRadius + 3));
 }
 
 export function render(state) {

@@ -1,79 +1,43 @@
 import { CONFIG } from './config.js';
-import { Hex, generateHexDisk, isInsideWorld } from './hex.js';
+import { Hex, generateHexDisk } from './hex.js';
+import { convertFloorSetToSourceMap } from './map-adapter-v1.js';
+import { compileMap } from './map-compile.js';
+import { createSourceMap, getSourceCell } from './map-source.js';
 
 export const allWorldCells = generateHexDisk(CONFIG.worldRadius);
 
-function normalizeCell(cell) {
-  return Array.isArray(cell) ? new Hex(cell[0], cell[1]) : cell;
-}
-
-export function buildFloorSetFromCells(cells) {
-  const floor = new Set();
-  for (const raw of cells) {
-    const cell = normalizeCell(raw);
-    if (isInsideWorld(cell, CONFIG.worldRadius)) {
-      floor.add(cell.key());
-    }
+function compileRuntimeMap(mapData) {
+  if (mapData?.runtimeByKey && mapData?.visualsByKey && mapData?.sourceMap) {
+    return mapData;
   }
-  return floor;
-}
 
-export function createDefaultTile(q, r) {
-  return {
-    q,
-    r,
-    type: 'void',
-    regionType: null,
-    roomId: null,
-    corridorId: null,
-    sideTypes: ['wall', 'wall', 'wall', 'wall', 'wall', 'wall'],
-  };
-}
-
-export function buildTilesFromFloorSet(floorSet) {
-  const tiles = new Map();
-  for (const cell of allWorldCells) {
-    const key = cell.key();
-    const tile = createDefaultTile(cell.q, cell.r);
-    if (floorSet.has(key)) {
-      tile.type = 'floor';
-    }
-    tiles.set(key, tile);
+  if (mapData?.cells) {
+    const sourceMap = createSourceMap({
+      radius: mapData.radius ?? mapData.meta?.radius ?? CONFIG.worldRadius,
+      cells: mapData.cells,
+      meta: mapData.meta ?? {},
+    });
+    return compileMap(sourceMap);
   }
-  return tiles;
-}
 
-export function buildFloorSetFromTiles(tiles) {
-  const floor = new Set();
-  for (const [key, tile] of tiles.entries()) {
-    if (tile.type === 'floor') {
-      floor.add(key);
-    }
+  if (mapData?.floor) {
+    // cave 系 generator が floor: Set<key> を返す暫定経路。
+    // Phase 2 で cave 系を source cell 直接出力化したらこの分岐と map-adapter-v1.js は廃止。
+    const sourceMap = convertFloorSetToSourceMap({
+      radius: mapData.meta?.radius ?? CONFIG.worldRadius,
+      floor: mapData.floor,
+      meta: mapData.meta ?? {},
+    });
+    return compileMap(sourceMap);
   }
-  return floor;
+
+  return compileMap(convertFloorSetToSourceMap({ radius: CONFIG.worldRadius, floor: new Set(), meta: { family: 'empty' } }));
 }
 
-export function buildWorldFromFixedDefinition(definition) {
-  const floor = buildFloorSetFromCells(definition.floorCells);
-  return {
-    floor,
-    tiles: buildTilesFromFloorSet(floor),
-  };
-}
-
-let currentMapData = { floor: new Set(), tiles: new Map() };
+let currentMapData = compileRuntimeMap(null);
 
 export function setCurrentMapData(mapData) {
-  const next = { ...mapData };
-
-  if (!next.tiles) {
-    next.tiles = buildTilesFromFloorSet(next.floor ?? new Set());
-  }
-  if (!next.floor) {
-    next.floor = buildFloorSetFromTiles(next.tiles);
-  }
-
-  currentMapData = next;
+  currentMapData = compileRuntimeMap(mapData);
 }
 
 export function getCurrentMapData() {
@@ -85,16 +49,38 @@ export function keyToHex(key) {
   return new Hex(q, r);
 }
 
-export function getTile(hex) {
-  return currentMapData.tiles?.get(hex.key()) ?? null;
+export function getRuntimeCell(hex) {
+  return currentMapData.runtimeByKey.get(hex.key()) ?? null;
+}
+
+export function getSourceCellAt(hex) {
+  return getSourceCell(currentMapData.sourceMap, hex);
+}
+
+export function getVisualCellAt(hex) {
+  return currentMapData.visualsByKey.get(hex.key()) ?? null;
+}
+
+export function canStandAt(hex) {
+  return getRuntimeCell(hex)?.canStand ?? false;
+}
+
+export function blocksSightH(hex) {
+  return getRuntimeCell(hex)?.blocksSightH ?? true;
+}
+
+export function blocksSightD(hex) {
+  return getRuntimeCell(hex)?.blocksSightD ?? true;
+}
+
+export function getFeature(hex) {
+  return getRuntimeCell(hex)?.feature ?? null;
 }
 
 export function isFloor(hex) {
-  const tile = getTile(hex);
-  if (tile) return tile.type === 'floor';
-  return currentMapData.floor.has(hex.key());
+  return canStandAt(hex);
 }
 
 export function isOpaque(hex) {
-  return !isFloor(hex);
+  return blocksSightH(hex);
 }

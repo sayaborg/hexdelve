@@ -1,4 +1,5 @@
-import { Hex, DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { createRng } from './rng.js';
 
 function tileKey(q, r) {
   return `${q},${r}`;
@@ -18,8 +19,8 @@ function initWallTiles(radius) {
 
 function countFloorNeighbors(tiles, q, r) {
   let count = 0;
-  for (const dir of DIRECTIONS) {
-    const neighbor = tiles.get(tileKey(q + dir.q, r + dir.r));
+  for (const heading of EDGE_DIRECTIONS) {
+    const neighbor = tiles.get(tileKey(q + heading.q, r + heading.r));
     if (neighbor && neighbor.terrain === 'floor') count += 1;
   }
   return count;
@@ -63,9 +64,9 @@ function carveConnectedSkeleton(tiles, center, rng, params, radius) {
   while (floorKeys.length < floorTarget) {
     const candidates = [];
 
-    for (let dirIndex = 0; dirIndex < DIRECTIONS.length; dirIndex += 1) {
-      const dir = DIRECTIONS[dirIndex];
-      const next = new Hex(current.q + dir.q, current.r + dir.r);
+    for (let headingIndex = 0; headingIndex < EDGE_DIRECTIONS.length; headingIndex += 1) {
+      const heading = EDGE_DIRECTIONS[headingIndex];
+      const next = new Hex(current.q + heading.q, current.r + heading.r);
       if (!isInsideWorld(next, radius)) continue;
       const key = next.key();
       const tile = tiles.get(key);
@@ -81,16 +82,16 @@ function carveConnectedSkeleton(tiles, center, rng, params, radius) {
       const edgeRatio = edgeDistance / Math.max(radius, 1);
       if (edgeRatio > 0.82) weight *= 0.72;
       const lastDir = visitedDirections[visitedDirections.length - 1];
-      if (typeof lastDir === 'number' && lastDir === dirIndex) weight += 0.18;
-      if (typeof lastDir === 'number' && (lastDir + 3) % 6 === dirIndex) weight *= 0.45;
-      candidates.push({ next, dirIndex, weight: Math.max(weight, 0.05) });
+      if (typeof lastDir === 'number' && lastDir === headingIndex) weight += 0.18;
+      if (typeof lastDir === 'number' && (lastDir + 3) % 6 === headingIndex) weight *= 0.45;
+      candidates.push({ next, headingIndex, weight: Math.max(weight, 0.05) });
     }
 
     const chosen = chooseWeightedCandidate(candidates, rng);
     if (!chosen) break;
     setFloor(tiles, floorKeys, chosen.next.q, chosen.next.r);
     current = chosen.next;
-    visitedDirections.push(chosen.dirIndex);
+    visitedDirections.push(chosen.headingIndex);
     if (visitedDirections.length > 8) visitedDirections.shift();
 
     if (rng.chance(0.10) && floorKeys.length > 20) {
@@ -143,31 +144,33 @@ function choosePlayerStart(tiles) {
   const bucket = floors.slice(0, Math.max(1, Math.floor(floors.length * 0.18)));
   const spacious = bucket.filter((tile) => countFloorNeighbors(tiles, tile.q, tile.r) >= 2);
   const choice = spacious[0] ?? bucket[0] ?? floors[0] ?? { q: 0, r: 0 };
-  return { q: choice.q, r: choice.r, facing: 2 };
+  return { q: choice.q, r: choice.r, facing: 0 };
 }
 
 function chooseEnemySpawns(tiles, playerStart, rng) {
   const origin = new Hex(playerStart.q, playerStart.r);
   const floors = collectFloorTiles(tiles).filter((tile) => {
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
+    // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。上限は過密回避のための family 固有値。
     return dist >= 9 && dist <= 22;
   });
   const shuffled = rng.shuffle(floors);
+  const count = rng.int(3, 5);
+  const [wtMin, wtMax] = CONFIG.enemyKinds.watcher.wtRange;
   const enemies = [];
   for (const tile of shuffled) {
+    if (enemies.length >= count) break;
     const pos = new Hex(tile.q, tile.r);
     const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
     if (tooClose) continue;
     enemies.push({
       id: `g${enemies.length + 1}`,
-      name: 'Watcher',
+      kind: 'watcher',
       q: tile.q,
       r: tile.r,
       facing: rng.int(0, 5),
-      profile: 'watcher',
-      wt: 10 + enemies.length,
+      wt: rng.int(wtMin, wtMax),
     });
-    if (enemies.length >= 3) break;
   }
   return enemies;
 }
@@ -182,7 +185,7 @@ function buildFloorSet(tiles) {
   return floor;
 }
 
-export function generateCaveMap({ radius, rng, params = {} }) {
+export function generateCaveMap({ radius, rng = createRng(20260415), params = {} }) {
   const resolvedParams = {
     floorRate: params.floorRate ?? 0.36,
     loopiness: params.loopiness ?? 0.14,

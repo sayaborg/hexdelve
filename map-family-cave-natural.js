@@ -1,4 +1,5 @@
-import { Hex, DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { createRng } from './rng.js';
 
 function tileKey(q, r) {
   return `${q},${r}`;
@@ -31,9 +32,9 @@ function initRandomTiles(radius, rng, params) {
 
 function countWallNeighbors(tiles, q, r, radius) {
   let count = 0;
-  for (const dir of DIRECTIONS) {
-    const nq = q + dir.q;
-    const nr = r + dir.r;
+  for (const heading of EDGE_DIRECTIONS) {
+    const nq = q + heading.q;
+    const nr = r + heading.r;
     if (!isInsideWorld(new Hex(nq, nr), radius)) {
       count += 1;
       continue;
@@ -73,8 +74,8 @@ function floorComponentFrom(tiles, start) {
   while (queue.length) {
     const current = queue.shift();
     out.push(current);
-    for (const dir of DIRECTIONS) {
-      const next = new Hex(current.q + dir.q, current.r + dir.r);
+    for (const heading of EDGE_DIRECTIONS) {
+      const next = new Hex(current.q + heading.q, current.r + heading.r);
       const tile = tiles.get(next.key());
       if (!tile || tile.terrain !== 'floor') continue;
       const key = next.key();
@@ -110,8 +111,8 @@ function carveSoftLoops(tiles, rng, count) {
   for (const tile of tiles.values()) {
     if (tile.terrain !== 'wall') continue;
     let floorNeighbors = 0;
-    for (const dir of DIRECTIONS) {
-      const neighbor = tiles.get(tileKey(tile.q + dir.q, tile.r + dir.r));
+    for (const heading of EDGE_DIRECTIONS) {
+      const neighbor = tiles.get(tileKey(tile.q + heading.q, tile.r + heading.r));
       if (neighbor && neighbor.terrain === 'floor') floorNeighbors += 1;
     }
     if (floorNeighbors >= 2 && floorNeighbors <= 3) candidates.push(tile);
@@ -128,8 +129,8 @@ function collectFloorTiles(tiles) {
 
 function countFloorNeighbors(tiles, q, r) {
   let count = 0;
-  for (const dir of DIRECTIONS) {
-    const tile = tiles.get(tileKey(q + dir.q, r + dir.r));
+  for (const heading of EDGE_DIRECTIONS) {
+    const tile = tiles.get(tileKey(q + heading.q, r + heading.r));
     if (tile && tile.terrain === 'floor') count += 1;
   }
   return count;
@@ -145,45 +146,24 @@ function choosePlayerStart(tiles) {
   const central = floors.slice(0, Math.max(1, Math.floor(floors.length * 0.20)));
   const spacious = central.filter((tile) => countFloorNeighbors(tiles, tile.q, tile.r) >= 2);
   const choice = spacious[0] ?? central[0] ?? floors[0] ?? { q: 0, r: 0 };
-  return { q: choice.q, r: choice.r, facing: 2 };
+  return { q: choice.q, r: choice.r, facing: 0 };
 }
 
 function chooseEnemySpawns(tiles, playerStart, rng) {
   const origin = new Hex(playerStart.q, playerStart.r);
-  const allFloors = collectFloorTiles(tiles).filter((tile) => !(tile.q === playerStart.q && tile.r === playerStart.r));
-  const bands = [
-    { minDist: 8, maxDist: 24, minSpacing: 6 },
-    { minDist: 6, maxDist: 28, minSpacing: 4 },
-    { minDist: 4, maxDist: 40, minSpacing: 0 },
-  ];
-
+  const floors = collectFloorTiles(tiles).filter((tile) => {
+    const dist = hexDistance(origin, new Hex(tile.q, tile.r));
+    return dist >= 8 && dist <= 24;
+  });
+  const shuffled = rng.shuffle(floors);
   const enemies = [];
-  const used = new Set();
-
-  for (const band of bands) {
-    const candidates = allFloors.filter((tile) => {
-      const dist = hexDistance(origin, new Hex(tile.q, tile.r));
-      return dist >= band.minDist && dist <= band.maxDist && !used.has(tileKey(tile.q, tile.r));
-    });
-    const shuffled = rng.shuffle(candidates);
-    for (const tile of shuffled) {
-      const pos = new Hex(tile.q, tile.r);
-      const tooClose = band.minSpacing > 0 && enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < band.minSpacing);
-      if (tooClose) continue;
-      enemies.push({
-        id: `n${enemies.length + 1}`,
-        name: 'Watcher',
-        q: tile.q,
-        r: tile.r,
-        facing: rng.int(0, 5),
-        profile: 'watcher',
-        wt: 10 + enemies.length,
-      });
-      used.add(tileKey(tile.q, tile.r));
-      if (enemies.length >= 3) return enemies;
-    }
+  for (const tile of shuffled) {
+    const pos = new Hex(tile.q, tile.r);
+    const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
+    if (tooClose) continue;
+    enemies.push({ id: `n${enemies.length + 1}`, name: 'Watcher', q: tile.q, r: tile.r, facing: rng.int(0, 5), profile: 'watcher', wt: 10 + enemies.length });
+    if (enemies.length >= 3) break;
   }
-
   return enemies;
 }
 
@@ -204,7 +184,7 @@ function generateNaturalAttempt(radius, rng, params) {
   return tiles;
 }
 
-export function generateNaturalCaveMap({ radius, rng, params = {} }) {
+export function generateNaturalCaveMap({ radius, rng = createRng(20260418), params = {} }) {
   const resolvedParams = { fillProb: params.fillProb ?? 0.49, smoothPasses: params.smoothPasses ?? 5, loopOpenings: params.loopOpenings ?? 2, minFloorCount: params.minFloorCount ?? 300 };
   let bestTiles = null;
   let bestFloorCount = -1;

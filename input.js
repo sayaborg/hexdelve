@@ -1,6 +1,6 @@
 export function bindControls(handlers) {
-  document.getElementById('rotateLeftBtn').addEventListener('click', () => handlers.rotatePreview(1));
-  document.getElementById('rotateRightBtn').addEventListener('click', () => handlers.rotatePreview(-1));
+  document.getElementById('rotateLeftBtn').addEventListener('click', () => handlers.rotatePreview(-1));
+  document.getElementById('rotateRightBtn').addEventListener('click', () => handlers.rotatePreview(1));
   document.getElementById('waitBtn').addEventListener('click', handlers.waitAction);
 
   document.querySelectorAll('[data-local-move]').forEach((button) => {
@@ -30,12 +30,12 @@ export function bindKeyboard(handlers) {
     const key = event.key.toLowerCase();
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      handlers.rotatePreview(1);
+      handlers.rotatePreview(-1);  // 左矢印 = 反時計回り(新規則では heading - 1)
       return;
     }
     if (event.key === 'ArrowRight') {
       event.preventDefault();
-      handlers.rotatePreview(-1);
+      handlers.rotatePreview(1);   // 右矢印 = 時計回り(新規則では heading + 1)
       return;
     }
 

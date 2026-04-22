@@ -1,7 +1,7 @@
 import { CONFIG } from './config.js';
 import {
-  DIRECTIONS,
-  DIRECTION_ANGLES_DEG,
+  EDGE_DIRECTIONS,
+  HEADING_ANGLES_DEG,
   Hex,
   getNeighbor,
   hexDistance,
@@ -86,14 +86,14 @@ export function hasLOS(source, target) {
   return false;
 }
 
-export function isWithinFOV(source, target, facingDirection, halfAngleDeg) {
+export function isWithinFOV(source, target, facing, halfAngleDeg) {
   if (source.equals(target)) {
     return true;
   }
 
   const sourcePx = getWorldCenter(source);
   const targetPx = getWorldCenter(target);
-  const facingPx = getWorldCenter(DIRECTIONS[facingDirection]);
+  const facingPx = getWorldCenter(EDGE_DIRECTIONS[facing]);
   const toTarget = normalizeVector(targetPx.x - sourcePx.x, targetPx.y - sourcePx.y);
   const facing = normalizeVector(facingPx.x, facingPx.y);
   const dot = toTarget.x * facing.x + toTarget.y * facing.y;
@@ -126,8 +126,8 @@ export function stabilizeVisibleSet(source, candidateVisible) {
     }
 
     let supported = false;
-    for (let dir = 0; dir < 6; dir += 1) {
-      const neighbor = getNeighbor(cell, dir);
+    for (let heading = 0; heading < 6; heading += 1) {
+      const neighbor = getNeighbor(cell, heading);
       if (!stable.has(neighbor.key())) {
         continue;
       }
@@ -145,7 +145,7 @@ export function stabilizeVisibleSet(source, candidateVisible) {
   return stable;
 }
 
-export function computePerception(source, facingDirection, profileName) {
+export function computePerception(source, facing, profileName) {
   const profile = CONFIG.perceptionProfiles[profileName];
   const nearAware = new Set();
 
@@ -162,7 +162,7 @@ export function computePerception(source, facingDirection, profileName) {
     if (hexDistance(source, cell) > profile.visionRadius) {
       continue;
     }
-    if (!isWithinFOV(source, cell, facingDirection, profile.fovHalfAngleDeg)) {
+    if (!isWithinFOV(source, cell, facing, profile.fovHalfAngleDeg)) {
       continue;
     }
     if (!hasLOS(source, cell)) {
@@ -184,14 +184,14 @@ export function bestFacingToward(from, target) {
   let bestDir = 0;
   let bestDot = -Infinity;
 
-  for (let dir = 0; dir < 6; dir += 1) {
-    const angleDeg = DIRECTION_ANGLES_DEG[dir];
+  for (let heading = 0; heading < 6; heading += 1) {
+    const angleDeg = HEADING_ANGLES_DEG[heading];
     const angleRad = (angleDeg * Math.PI) / 180;
     const facing = { x: Math.cos(angleRad), y: Math.sin(angleRad) };
     const dot = toTarget.x * facing.x + toTarget.y * facing.y;
     if (dot > bestDot) {
       bestDot = dot;
-      bestDir = dir;
+      bestDir = heading;
     }
   }
 

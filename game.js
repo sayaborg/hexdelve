@@ -1,11 +1,10 @@
 import { CONFIG, LOCAL_MOVE_LABELS } from './config.js';
-import { Hex, cloneHex, DIRECTION_LABELS, getNeighbor } from './hex.js';
-import { allWorldCells, buildWorldFromFixedDefinition, isFloor, setCurrentMapData } from './map.js';
-import { FIXED_MAPS, getFixedMapById } from './fixed-maps.js';
+import { Hex, cloneHex, HEADING_LABELS, getNeighbor } from './hex.js';
+import { allWorldCells, isFloor, setCurrentMapData } from './map.js';
 import { createRng } from './rng.js';
 import { generateCaveMap } from './map-family-cave.js';
 import { generateNaturalCaveMap } from './map-family-cave-natural.js';
-import { generateRoomsClassicMap } from './map-family-rooms-classic.js';
+import { generateClassicRoomsMap } from './map-family-rooms-classic.js';
 import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
 import { render } from './render.js';
@@ -17,8 +16,8 @@ const state = {
   cloneHex,
   turn: 0,
   playerPos: new Hex(0, 0),
-  previewFacing: 2,
-  committedFacing: 2,
+  previewFacing: 0,
+  committedFacing: 0,
   visible: new Set(),
   nearAware: new Set(),
   explored: new Set(),
@@ -27,10 +26,8 @@ const state = {
   playerWt: 10,
   gameOver: false,
   enemies: [],
-  currentMapId: CONFIG.defaultGeneratedMapId ?? CONFIG.defaultFixedMapId,
+  currentMapId: CONFIG.defaultGeneratedMapId,
   currentMapName: '',
-  currentMapMeta: {},
-  currentMapDebug: {},
 };
 
 function getLogElement() {
@@ -54,13 +51,10 @@ function pushLog(tag, message) {
 }
 
 function refreshVisibility() {
-  const perception = computePerception(state.playerPos, state.committedFacing, 'player');
+  const perception = computePerception(state.playerPos, state.committedFacing, CONFIG.player.perception);
   state.visible = perception.visible;
   state.nearAware = perception.nearAware;
   for (const key of state.visible) {
-    state.explored.add(key);
-  }
-  for (const key of state.nearAware) {
     state.explored.add(key);
   }
 }
@@ -74,13 +68,20 @@ function rotatePreview(delta) {
     return;
   }
   state.previewFacing = (state.previewFacing + delta + 6) % 6;
-  pushLog('TURN', `仮向きを ${DIRECTION_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`);
+  pushLog('TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`);
   render(state);
 }
 
-function localMoveToWorldDirection(localMove) {
-  const offsets = [0, -1, -2, 3, 2, 1];
-  return (state.previewFacing + offsets[localMove] + 6) % 6;
+function localMoveToWorldHeading(localMove) {
+  // 新規則(heading 0=N、時計回り)では
+  //   localMove 0=前     → facing + 0
+  //             1=右前   → facing + 1
+  //             2=右後   → facing + 2
+  //             3=後     → facing + 3
+  //             4=左後   → facing + 4
+  //             5=左前   → facing + 5
+  // LOCAL_MOVE_LABELS の順序と自然に一致する。
+  return (state.previewFacing + localMove) % 6;
 }
 
 function removeDeadEnemies() {
@@ -264,8 +265,8 @@ function tryMove(localMove) {
   }
 
   const enemyPlans = planEnemyActions(state);
-  const direction = localMoveToWorldDirection(localMove);
-  const target = getNeighbor(state.playerPos, direction);
+  const heading = localMoveToWorldHeading(localMove);
+  const target = getNeighbor(state.playerPos, heading);
   let playerPlan = { type: 'wait' };
 
   commitFacing();
@@ -306,29 +307,35 @@ function waitAction() {
   const enemyPlans = planEnemyActions(state);
   commitFacing();
   state.turn += 1;
-  pushLog('WAIT', `Turn ${state.turn}: 待機。確定向きは ${DIRECTION_LABELS[state.committedFacing]}。`);
+  pushLog('WAIT', `Turn ${state.turn}: 待機。確定向きは ${HEADING_LABELS[state.committedFacing]}。`);
   finishTurn({ type: 'wait' }, enemyPlans);
 }
 
 function buildEnemiesFromEntries(entries = []) {
-  return entries.map((enemy, index) => ({
-    id: enemy.id ?? `e${index + 1}`,
-    name: enemy.name ?? 'Watcher',
-    pos: new Hex(enemy.q, enemy.r),
-    homePos: new Hex(enemy.q, enemy.r),
-    facing: enemy.facing ?? 2,
-    homeFacing: enemy.facing ?? 2,
-    hp: enemy.hp ?? 3,
-    maxHp: enemy.maxHp ?? 3,
-    wt: enemy.wt ?? 10,
-    profile: enemy.profile ?? 'watcher',
-    mode: 'patrol',
-    lastSeenPlayerPos: null,
-  }));
-}
-
-function buildEnemiesFromDefinition(definition) {
-  return buildEnemiesFromEntries(definition.enemies);
+  return entries.map((entry, index) => {
+    const kindId = entry.kind ?? 'watcher';
+    const kindDef = CONFIG.enemyKinds[kindId];
+    if (!kindDef) {
+      throw new Error(`Unknown enemyKind: ${kindId}`);
+    }
+    return {
+      id: entry.id ?? `e${index + 1}`,
+      kind: kindId,
+      name: entry.name ?? kindDef.name,
+      pos: new Hex(entry.q, entry.r),
+      homePos: new Hex(entry.q, entry.r),
+      facing: entry.facing ?? 0,
+      homeFacing: entry.facing ?? 0,
+      hp: entry.hp ?? kindDef.hp,
+      maxHp: entry.maxHp ?? kindDef.hp,
+      wt: entry.wt ?? kindDef.wtRange[0],
+      perception: kindDef.perception,
+      ai: kindDef.ai,
+      damage: kindDef.damage,
+      mode: 'patrol',
+      lastSeenPlayerPos: null,
+    };
+  });
 }
 
 
@@ -336,10 +343,6 @@ function getGeneratedPreset(mapId = null) {
   const generatedMaps = state.config.generatedMaps ?? {};
   const resolvedId = mapId ?? state.config.defaultGeneratedMapId;
   return generatedMaps[resolvedId] ?? generatedMaps[state.config.defaultGeneratedMapId] ?? null;
-}
-
-function isGeneratedMapId(mapId) {
-  return Boolean(getGeneratedPreset(mapId));
 }
 
 function generateMapFromPreset(mapId) {
@@ -352,7 +355,7 @@ function generateMapFromPreset(mapId) {
     return generateNaturalCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
   }
   if (preset.family === 'rooms_classic') {
-    return generateRoomsClassicMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
+    return generateClassicRoomsMap({ radius: state.config.worldRadius, rng, params: { seed: preset.seed ?? 12345, ...(preset.params ?? {}) } });
   }
   return generateCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
 }
@@ -375,10 +378,9 @@ function updateMapUi() {
     } else if (state.currentMapId === 'generated_cave_natural') {
       mapMeta.textContent = '自然洞窟寄りCave。Cellular Automata で塊を作り、最大連結成分のみ採用。';
     } else if (state.currentMapId === 'generated_rooms_classic') {
-      mapMeta.textContent = '古典ローグライク寄り。正六角部屋の room graph と door 候補を表示する段階。';
+      mapMeta.textContent = 'semantic-v2 rooms family。room / corridor / threshold / door を持つ canonical classic rooms。';
     } else {
-      const definition = getFixedMapById(state.currentMapId);
-      mapMeta.textContent = definition.description ?? '';
+      mapMeta.textContent = '';
     }
   }
 }
@@ -396,12 +398,6 @@ function setupMapUi() {
     mapSelect.appendChild(option);
   }
 
-  for (const map of FIXED_MAPS) {
-    const option = document.createElement('option');
-    option.value = map.id;
-    option.textContent = map.name;
-    mapSelect.appendChild(option);
-  }
   updateMapUi();
 }
 
@@ -409,18 +405,13 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   const generated = generateMapFromPreset(mapId);
   const preset = getGeneratedPreset(mapId);
 
-  setCurrentMapData({
-    floor: generated.floor,
-    tiles: generated.tiles,
-  });
+  setCurrentMapData(generated);
 
   state.currentMapId = mapId;
   state.currentMapName = buildGeneratedMapLabel(mapId);
-  state.currentMapMeta = generated.meta ?? {};
-  state.currentMapDebug = generated.debug ?? {};
   state.playerPos = new Hex(generated.playerStart.q, generated.playerStart.r);
-  state.previewFacing = generated.playerStart.facing ?? 2;
-  state.committedFacing = generated.playerStart.facing ?? 2;
+  state.previewFacing = generated.playerStart.facing ?? 0;
+  state.committedFacing = generated.playerStart.facing ?? 0;
   state.visible = new Set();
   state.nearAware = new Set();
   state.explored = new Set();
@@ -438,41 +429,9 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   updateMapUi();
   render(state);
 
-  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / floor ${generated.meta.floorCount ?? generated.floor.size} / radius ${generated.meta.radius}。`);
+  const standableCount = generated.meta.floorCount ?? generated.floor?.size ?? generated.cells?.filter((cell) => cell.support === 'stable').length ?? 0;
+  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / standable ${standableCount} / radius ${generated.meta.radius}。`);
   pushLog('GEN', `${JSON.stringify(preset?.params ?? generated.meta.params)}`);
-  pushLog('KEY', '← / → で回頭、Q/W/E/A/S/D = 左前 / 前 / 右前 / 左後 / 後 / 右後。');
-}
-
-function resetRunWithFixedMap(mapId, { keepLog = false } = {}) {
-  const definition = getFixedMapById(mapId);
-  const world = buildWorldFromFixedDefinition(definition);
-  setCurrentMapData(world);
-
-  state.currentMapId = definition.id;
-  state.currentMapName = definition.name;
-  state.currentMapMeta = {};
-  state.currentMapDebug = {};
-  state.playerPos = new Hex(definition.playerStart.q, definition.playerStart.r);
-  state.previewFacing = definition.playerStart.facing;
-  state.committedFacing = definition.playerStart.facing;
-  state.visible = new Set();
-  state.nearAware = new Set();
-  state.explored = new Set();
-  state.playerHP = state.playerMaxHP;
-  state.gameOver = false;
-  state.turn = 0;
-  state.enemies = buildEnemiesFromDefinition(definition);
-
-  if (!keepLog) {
-    clearLog();
-  }
-
-  refreshVisibility();
-  updateEnemyAwareness(state, { pushLog });
-  updateMapUi();
-  render(state);
-
-  pushLog('MAP', `${definition.name} をロード。${definition.description}`);
   pushLog('KEY', '← / → で回頭、Q/W/E/A/S/D = 左前 / 前 / 右前 / 左後 / 後 / 右後。');
 }
 
@@ -482,28 +441,16 @@ function bootstrap() {
     tryMove,
     waitAction,
     onSelectMap: (mapId) => {
-      if (isGeneratedMapId(mapId)) {
-        resetRunWithGeneratedMap(mapId);
-      } else {
-        resetRunWithFixedMap(mapId);
-      }
+      resetRunWithGeneratedMap(mapId);
     },
     onResetMap: () => {
-      if (isGeneratedMapId(state.currentMapId)) {
-        resetRunWithGeneratedMap(state.currentMapId);
-      } else {
-        resetRunWithFixedMap(state.currentMapId);
-      }
+      resetRunWithGeneratedMap(state.currentMapId);
     },
   });
   bindKeyboard({ rotatePreview, tryMove });
   setupMapUi();
-  if (CONFIG.defaultMapMode === 'generated') {
-    resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true });
-  } else {
-    resetRunWithFixedMap(CONFIG.defaultFixedMapId, { keepLog: true });
-  }
-  pushLog('INIT', 'Split Prototype を初期化。固定マップと複数の生成Caveを切替可能。');
+  resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true });
+  pushLog('INIT', 'Split Prototype を初期化。生成マップ(rooms_classic / cave_walk / cave_natural)のみ利用可能。');
   pushLog('LOS', '中心→中心を基準にし、境界曖昧ケースは 3 本線のうち 1 本でも通れば可視。');
   pushLog('FOV', 'プレイヤーも敵も前方120度FOV + LOS + 近接知覚で認識する。');
   pushLog('RULE', '回頭はゼロターンで情報を増やさず、移動や待機で初めて視界更新が走る。');

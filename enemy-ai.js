@@ -1,16 +1,16 @@
-import { DIRECTIONS, getNeighbor, hexDistance } from './hex.js';
+import { EDGE_DIRECTIONS, getNeighbor, hexDistance } from './hex.js';
 import { isFloor } from './map.js';
 import { bestFacingToward, computePerception } from './perception.js';
 
 function stepToward(from, to) {
   let best = null;
   let bestDistance = Infinity;
-  for (let direction = 0; direction < DIRECTIONS.length; direction += 1) {
-    const next = getNeighbor(from, direction);
+  for (let heading = 0; heading < EDGE_DIRECTIONS.length; heading += 1) {
+    const next = getNeighbor(from, heading);
     if (!isFloor(next)) continue;
     const distance = hexDistance(next, to);
     if (distance < bestDistance) {
-      best = { next, direction };
+      best = { next, heading };
       bestDistance = distance;
     }
   }
@@ -20,17 +20,17 @@ function stepToward(from, to) {
 function choosePatrolStep(enemy, occupied) {
   const priority = [0, -1, 1, -2, 2, 3];
   for (const delta of priority) {
-    const direction = (enemy.facing + delta + 6) % 6;
-    const candidate = getNeighbor(enemy.pos, direction);
+    const heading = (enemy.facing + delta + 6) % 6;
+    const candidate = getNeighbor(enemy.pos, heading);
     if (!isFloor(candidate)) continue;
     if (occupied.has(candidate.key())) continue;
-    return { next: candidate, direction };
+    return { next: candidate, heading };
   }
   return null;
 }
 
 function getNoticeResult(state, enemy) {
-  const perception = computePerception(enemy.pos, enemy.facing, enemy.profile ?? 'watcher');
+  const perception = computePerception(enemy.pos, enemy.facing, enemy.perception);
   const playerKey = state.playerPos.key();
   return {
     visible: perception.visible.has(playerKey),
@@ -66,7 +66,7 @@ export function planEnemyActions(state) {
         enemyId: enemy.id,
         type: 'move',
         target: move.next,
-        facing: move.direction,
+        facing: move.heading,
       };
     }
 
@@ -79,7 +79,7 @@ export function planEnemyActions(state) {
         enemyId: enemy.id,
         type: 'move',
         target: move.next,
-        facing: move.direction,
+        facing: move.heading,
       };
     }
 
@@ -95,49 +95,12 @@ export function planEnemyActions(state) {
         enemyId: enemy.id,
         type: 'move',
         target: move.next,
-        facing: move.direction,
+        facing: move.heading,
       };
     }
 
     return { enemyId: enemy.id, type: 'wait' };
   });
-}
-
-export function executeEnemyActions(state, plans, hooks) {
-  const occupied = new Set(state.enemies.filter((enemy) => enemy.hp > 0).map((enemy) => enemy.pos.key()));
-
-  for (const plan of plans) {
-    if (!plan) continue;
-    const enemy = state.enemies.find((entry) => entry.id === plan.enemyId);
-    if (!enemy || enemy.hp <= 0) continue;
-
-    occupied.delete(enemy.pos.key());
-
-    if (typeof plan.facing === 'number') {
-      enemy.facing = plan.facing;
-    }
-
-    if (plan.type !== 'move' || !plan.target) {
-      occupied.add(enemy.pos.key());
-      continue;
-    }
-
-    const targetKey = plan.target.key();
-    if (state.playerPos.equals(plan.target)) {
-      enemy.facing = bestFacingToward(enemy.pos, state.playerPos);
-      hooks.enemyAttackPlayer(enemy);
-      occupied.add(enemy.pos.key());
-      continue;
-    }
-
-    if (!isFloor(plan.target) || occupied.has(targetKey)) {
-      occupied.add(enemy.pos.key());
-      continue;
-    }
-
-    enemy.pos = plan.target;
-    occupied.add(enemy.pos.key());
-  }
 }
 
 export function updateEnemyAwareness(state, hooks) {
