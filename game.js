@@ -397,6 +397,10 @@ function transitionFloor() {
   state.visible = new Set();
   state.nearAware = new Set();
   state.explored = new Set();
+  // 通過してきた階段は既知扱いで explored に追加(SPEC §9.9)。
+  // そうしないと、プレイヤー背後の階段が未知=真っ黒で描画され、
+  // 「階段がない」ようにユーザーに見えてしまう。
+  state.explored.add(`${stairsConstraint.q},${stairsConstraint.r}`);
 
   refreshVisibility();
   updateEnemyAwareness(state, { pushLog });
