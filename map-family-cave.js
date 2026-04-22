@@ -1,5 +1,5 @@
 import { CONFIG } from './config.js';
-import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
 
 function tileKey(q, r) {
@@ -223,15 +223,14 @@ function buildSourceCells(tiles, radius, stairsInfo) {
 // 歩行可能な隣接タイルを持つものをランダム選択。
 function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
   if (stairsConstraint) {
-    // フロア遷移時の対応階段契約: 指定位置を強制で floor にし、周囲もなるべく floor に。
+    // フロア遷移時の対応階段契約: 指定位置を強制で floor にし、プレイヤーが spawn する
+    // opposite(enterHeading) 方向隣接も floor 化(そこに spawn するため)。
     const key = tileKey(stairsConstraint.q, stairsConstraint.r);
     let tile = tiles.get(key);
     if (tile) tile.terrain = 'floor';
-    // enterHeading の反対方向(= プレイヤーが降り立つ方向の opposite = 階段に「入る」側)も floor に
-    // しておかないと、プレイヤーが到達できなくなる可能性。exitHeading 方向隣接も floor 必須。
-    const exitOffset = EDGE_DIRECTIONS[stairsConstraint.enterHeading];
-    const exitNeighbor = tiles.get(tileKey(stairsConstraint.q + exitOffset.q, stairsConstraint.r + exitOffset.r));
-    if (exitNeighbor) exitNeighbor.terrain = 'floor';
+    const spawnOffset = EDGE_DIRECTIONS[oppositeHeading(stairsConstraint.enterHeading)];
+    const spawnNeighbor = tiles.get(tileKey(stairsConstraint.q + spawnOffset.q, stairsConstraint.r + spawnOffset.r));
+    if (spawnNeighbor) spawnNeighbor.terrain = 'floor';
     return {
       q: stairsConstraint.q,
       r: stairsConstraint.r,
@@ -290,12 +289,15 @@ export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(2
 
   // フロア遷移時は、階段位置近くからプレイヤーが spawn する必要があるため、
   // まず stairs を確定させ、それを元に playerStart を決める。
+  // 遷移時の配置(SPEC §9.9): 階段の opposite(enterHeading) 方向隣接 = 物理的に
+  // プレイヤーが出てきた側。facing は旧 exitHeading(= opposite(新 enterHeading))。
   let playerStart;
   let stairsInfo;
   if (stairsConstraint) {
     stairsInfo = placeStairsForCave(tiles, { q: 0, r: 0 }, stairsConstraint, rng);
-    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
-    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: stairsInfo.exitHeading };
+    const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
+    const off = EDGE_DIRECTIONS[spawnHeading];
+    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: spawnHeading };
   } else {
     playerStart = choosePlayerStart(tiles);
     stairsInfo = placeStairsForCave(tiles, playerStart, null, rng);

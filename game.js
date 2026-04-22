@@ -362,15 +362,17 @@ function transitionFloor() {
   if (oldStairs?.kind !== 'stairs') {
     throw new Error('transitionFloor called off stairs');
   }
-  const oldEnterHeading = oldStairs.params.enterHeading;
+  const oldExitHeading = oldStairs.params.exitHeading;
   const oldVerticalMode = oldStairs.params.verticalMode;
 
-  // 対応階段契約(SPEC §9.9):
-  //   新 verticalMode = 旧の反対
-  //   新 exitHeading = 旧 enterHeading(プレイヤーは来た方向の「続き」に降り立つ)
-  //   通過型なので新 enterHeading = 新 exitHeading
+  // 対応階段契約(SPEC §9.9、物理モデル):
+  //   旧フロアでプレイヤーは exitHeading 方向に階段を通過して出た。
+  //   新フロアでは、プレイヤーが出てきた方向 = opposite(旧 exitHeading) が
+  //   新階段の「入口側」になる。よって新 enterHeading = opposite(旧 exitHeading)。
+  //   通過型なので新 exitHeading = 新 enterHeading。
+  //   新 verticalMode は物理的に反対(up ↔ down)。
+  const newEnterHeading = oppositeHeading(oldExitHeading);
   const newVerticalMode = oldVerticalMode === 'up' ? 'down' : 'up';
-  const newEnterHeading = oldEnterHeading;
 
   const stairsConstraint = {
     q: state.playerPos.q,
@@ -387,7 +389,7 @@ function transitionFloor() {
 
   // プレイヤー再配置(generator が返した playerStart に従う)
   state.playerPos = new Hex(newMap.playerStart.q, newMap.playerStart.r);
-  state.committedFacing = newMap.playerStart.facing ?? newEnterHeading;
+  state.committedFacing = newMap.playerStart.facing ?? oldExitHeading;
   state.previewFacing = state.committedFacing;
 
   // 状態リセット(HP / maxHP / turn は引き継ぎ)
@@ -399,7 +401,7 @@ function transitionFloor() {
   refreshVisibility();
   updateEnemyAwareness(state, { pushLog });
   render(state);
-  pushLog('FLOOR', `新フロア生成。階段(${stairsConstraint.q},${stairsConstraint.r})の verticalMode=${newVerticalMode}、exitHeading=${newEnterHeading}。`);
+  pushLog('FLOOR', `新フロア生成。階段(${stairsConstraint.q},${stairsConstraint.r})の verticalMode=${newVerticalMode}、enterHeading=${newEnterHeading}。`);
 }
 
 function waitAction() {

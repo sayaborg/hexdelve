@@ -1,5 +1,5 @@
 import { CONFIG } from './config.js';
-import { EDGE_DIRECTIONS, Hex, hexDistance, isInsideWorld } from './hex.js';
+import { EDGE_DIRECTIONS, Hex, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
 
 // ---- 幾何ヘルパ ----
@@ -239,14 +239,17 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
 
   // プレイヤー初期位置を決定
   //   初期フロア: centerRoom.center (= (0, 0))、facing = 0
-  //   フロア遷移: 階段 exitHeading 方向の隣接タイル、facing = exitHeading
+  //   フロア遷移: 階段の「開口部側」= opposite(enterHeading) 方向隣接タイルに spawn。
+  //              facing は旧フロアでの進行方向(= 旧 exitHeading)を維持 =
+  //              新 enterHeading の opposite。
   let playerStart;
   if (stairsConstraint) {
-    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
+    const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
+    const off = EDGE_DIRECTIONS[spawnHeading];
     playerStart = {
       q: stairsInfo.q + off.q,
       r: stairsInfo.r + off.r,
-      facing: stairsInfo.exitHeading,
+      facing: spawnHeading,
     };
   } else {
     playerStart = { q: centerRoom.center.q, r: centerRoom.center.r, facing: 0 };

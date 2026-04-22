@@ -1,5 +1,5 @@
 import { CONFIG } from './config.js';
-import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
+import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
 
 function tileKey(q, r) {
@@ -221,8 +221,9 @@ function placeStairsForNaturalCave(tiles, playerStart, stairsConstraint, rng) {
     const key = tileKey(stairsConstraint.q, stairsConstraint.r);
     const tile = tiles.get(key);
     if (tile) tile.terrain = 'floor';
-    const off = EDGE_DIRECTIONS[stairsConstraint.enterHeading];
-    const neighbor = tiles.get(tileKey(stairsConstraint.q + off.q, stairsConstraint.r + off.r));
+    // プレイヤー spawn 側 = opposite(enterHeading) 方向隣接も floor 化
+    const spawnOff = EDGE_DIRECTIONS[oppositeHeading(stairsConstraint.enterHeading)];
+    const neighbor = tiles.get(tileKey(stairsConstraint.q + spawnOff.q, stairsConstraint.r + spawnOff.r));
     if (neighbor) neighbor.terrain = 'floor';
     return {
       q: stairsConstraint.q,
@@ -293,8 +294,11 @@ export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = crea
   let stairsInfo;
   if (stairsConstraint) {
     stairsInfo = placeStairsForNaturalCave(bestTiles, { q: 0, r: 0 }, stairsConstraint, rng);
-    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
-    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: stairsInfo.exitHeading };
+    // 遷移時配置(SPEC §9.9): 階段の opposite(enterHeading) 方向隣接、
+    // facing = 旧 exitHeading = opposite(新 enterHeading)。
+    const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
+    const off = EDGE_DIRECTIONS[spawnHeading];
+    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: spawnHeading };
   } else {
     playerStart = choosePlayerStart(bestTiles);
     stairsInfo = placeStairsForNaturalCave(bestTiles, playerStart, null, rng);
