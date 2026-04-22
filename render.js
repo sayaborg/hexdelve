@@ -101,6 +101,7 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       doorClosed: { fill: '#6a5531', stroke: '#b59554' },
       doorLocked: { fill: '#7a2f3a', stroke: '#c55763' },
       doorOpen: { fill: '#2f6a5a', stroke: '#61a890' },
+      stairs: { fill: '#4e4b75', stroke: '#a5a2d8' },
     },
     near: {
       room: { fill: CONFIG.colors.floorNear, stroke: CONFIG.colors.floorNearStroke },
@@ -110,6 +111,7 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       doorClosed: { fill: '#62513b', stroke: '#8f7756' },
       doorLocked: { fill: '#6a3138', stroke: '#a04753' },
       doorOpen: { fill: '#31584e', stroke: '#4d8274' },
+      stairs: { fill: '#403c5e', stroke: '#7b78b0' },
     },
     known: {
       room: { fill: CONFIG.colors.floorKnown, stroke: CONFIG.colors.floorKnownStroke },
@@ -119,6 +121,7 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       doorClosed: { fill: '#544633', stroke: '#7b6a50' },
       doorLocked: { fill: '#522a31', stroke: '#7a4048' },
       doorOpen: { fill: '#25483f', stroke: '#416a5f' },
+      stairs: { fill: '#322f4a', stroke: '#5b5888' },
     },
   };
 
@@ -127,6 +130,9 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
     if (feature.state === 'open') return palette.doorOpen;
     if (feature.state === 'locked') return palette.doorLocked;
     return palette.doorClosed;
+  }
+  if (feature?.kind === 'stairs') {
+    return palette.stairs;
   }
   if (!sourceCell || !canStand) return palette.wall;
   if (sourceCell.structureKind === 'corridor') return palette.corridor;
@@ -139,6 +145,11 @@ function doorLabelFor(feature) {
   if (feature.state === 'open') return null;
   if (feature.state === 'locked') return 'L';
   return 'D';
+}
+
+function stairsLabelFor(feature) {
+  if (feature?.kind !== 'stairs') return null;
+  return feature.params?.verticalMode === 'up' ? '↑' : '↓';
 }
 
 function getCellPaint(cell, state) {
@@ -156,7 +167,10 @@ function getCellPaint(cell, state) {
 
   const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
   const palette = getSemanticPalette(sourceCell, feature, canStand, mode);
-  const label = isVisible ? doorLabelFor(feature) : null;
+  // 階段ラベルは known/near でも出す(一度見たら記憶)、door ラベルは visible のみ。
+  const stairsLabel = stairsLabelFor(feature);
+  const doorLabel = isVisible ? doorLabelFor(feature) : null;
+  const label = stairsLabel ?? doorLabel;
   const labelColor = mode === 'visible' ? CONFIG.colors.text : CONFIG.colors.muted;
   return {
     fill: palette.fill,

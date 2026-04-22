@@ -78,18 +78,19 @@ function collectRoomFloorCells(cellMap, rooms, reserved) {
   return candidates;
 }
 
-function chooseEnemies(rooms, cellMap, startRoomCenter, rng) {
+function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
   // 仕様(SPEC §11.3): 3〜5 体、プレイヤー初期位置から hexDistance >= 5。
   // wt は watcher の wtRange から乱数で決定、以降個体固定。
   const count = rng.int(3, 5);
   const watcherKind = CONFIG.enemyKinds.watcher;
   const [wtMin, wtMax] = watcherKind.wtRange;
 
-  const reserved = new Set([startRoomCenter.key()]);
+  const reserved = new Set([startCenter.key()]);
+  if (stairsHex) reserved.add(stairsHex.key());
   const candidates = collectRoomFloorCells(cellMap, rooms, reserved);
 
   const ranked = candidates
-    .map((cell) => ({ cell, dist: hexDistance(new Hex(cell.q, cell.r), startRoomCenter) }))
+    .map((cell) => ({ cell, dist: hexDistance(new Hex(cell.q, cell.r), startCenter) }))
     .filter((entry) => entry.dist >= 5)
     .sort((a, b) => b.dist - a.dist);
 
@@ -100,7 +101,7 @@ function chooseEnemies(rooms, cellMap, startRoomCenter, rng) {
     const key = `${entry.cell.q},${entry.cell.r}`;
     if (used.has(key)) continue;
     used.add(key);
-    const facing = chooseFacingToward(new Hex(entry.cell.q, entry.cell.r), startRoomCenter);
+    const facing = chooseFacingToward(new Hex(entry.cell.q, entry.cell.r), startCenter);
     enemies.push({
       id: `e${enemies.length + 1}`,
       kind: 'watcher',
@@ -113,13 +114,50 @@ function chooseEnemies(rooms, cellMap, startRoomCenter, rng) {
   return enemies;
 }
 
+// ---- 階段配置 ----
+
+// 階段情報を決定する。
+//   stairsConstraint あり(フロア遷移時): 指定の (q, r), enterHeading, verticalMode を強制
+//   stairsConstraint なし(初期フロア):    (0, -1) 固定、enterHeading=0 (N)、verticalMode は乱数
+function resolveStairsInfo(stairsConstraint, rng) {
+  if (stairsConstraint) {
+    return {
+      q: stairsConstraint.q,
+      r: stairsConstraint.r,
+      enterHeading: stairsConstraint.enterHeading,
+      exitHeading: stairsConstraint.enterHeading,  // 通過型(SPEC §4.3, §12.5)
+      verticalMode: stairsConstraint.verticalMode,
+    };
+  }
+  // 初期フロア: 中心部屋 (0, 0) の N 隣接 = (0, -1)
+  const initialHeading = 0;
+  return {
+    q: 0 + EDGE_DIRECTIONS[initialHeading].q,
+    r: 0 + EDGE_DIRECTIONS[initialHeading].r,
+    enterHeading: initialHeading,
+    exitHeading: initialHeading,
+    verticalMode: rng.chance(0.5) ? 'up' : 'down',
+  };
+}
+
 // ---- 生成本体 ----
 
-export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = null, params = {} } = {}) {
+export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = null, params = {}, stairsConstraint = null } = {}) {
   const localRng = rng ?? createRng(params.seed ?? 20260419);
   const cellMap = new Map();
   const roomCount = localRng.chance(0.5) ? 3 : 4;
-  const centerRoom = { id: 'r1', center: new Hex(0, 0), radius: 2 };
+
+  // 階段情報を先に確定させる(centerRoom の位置決めに使う)
+  const stairsInfo = resolveStairsInfo(stairsConstraint, localRng);
+
+  // centerRoom.center:
+  //   stairsConstraint あり → 階段位置に中心部屋を寄せる(プレイヤーは階段 exitHeading 隣接で spawn)
+  //   stairsConstraint なし → (0, 0)(プレイヤーは (0, 0) spawn、階段は (0, -1))
+  const centerRoomCenter = stairsConstraint
+    ? new Hex(stairsInfo.q, stairsInfo.r)
+    : new Hex(0, 0);
+  const centerRoom = { id: 'r1', center: centerRoomCenter, radius: 2 };
+
   const outerHeadings = roomCount === 3 ? [0, 3] : [0, 2, 4];
   const rooms = [centerRoom];
   outerHeadings.forEach((heading, index) => {
@@ -132,6 +170,25 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   });
 
   for (const room of rooms) addRoomDisk(cellMap, room.center, room.radius, room.id);
+
+  // 階段を中心部屋内の該当タイルに配置(既に room として addCell されているので、feature を重ねる)
+  const stairsHex = new Hex(stairsInfo.q, stairsInfo.r);
+  addCell(cellMap, stairsHex, {
+    support: 'stable',
+    sightH: 'pass',
+    sightD: 'block',
+    structureKind: 'room',
+    feature: {
+      kind: 'stairs',
+      state: 'normal',
+      params: {
+        enterHeading: stairsInfo.enterHeading,
+        exitHeading: stairsInfo.exitHeading,
+        verticalMode: stairsInfo.verticalMode,
+      },
+    },
+    meta: { roomId: centerRoom.id },
+  });
 
   // v0 動作確認用: 外部屋のうち 1 つの出口を closed ドア、もう 1 つを locked ドアにする。
   // 3 部屋(外 2 つ)なら 1 つずつ、4 部屋(外 3 つ)なら 1 つは扉なし。
@@ -180,14 +237,30 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
     });
   }
 
+  // プレイヤー初期位置を決定
+  //   初期フロア: centerRoom.center (= (0, 0))、facing = 0
+  //   フロア遷移: 階段 exitHeading 方向の隣接タイル、facing = exitHeading
+  let playerStart;
+  if (stairsConstraint) {
+    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
+    playerStart = {
+      q: stairsInfo.q + off.q,
+      r: stairsInfo.r + off.r,
+      facing: stairsInfo.exitHeading,
+    };
+  } else {
+    playerStart = { q: centerRoom.center.q, r: centerRoom.center.r, facing: 0 };
+  }
+
   const cells = Array.from(cellMap.values());
-  const enemies = chooseEnemies(rooms, cellMap, centerRoom.center, localRng);
+  const enemies = chooseEnemies(rooms, cellMap, new Hex(playerStart.q, playerStart.r), localRng, stairsHex);
 
   return {
     radius,
     cells,
-    playerStart: { q: centerRoom.center.q, r: centerRoom.center.r, facing: 0 },
+    playerStart,
     enemies,
+    stairs: stairsInfo,
     meta: {
       family: 'rooms_classic',
       radius,

@@ -148,9 +148,10 @@ function choosePlayerStart(tiles) {
   return { q: choice.q, r: choice.r, facing: 0 };
 }
 
-function chooseEnemySpawns(tiles, playerStart, rng) {
+function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
   const origin = new Hex(playerStart.q, playerStart.r);
   const floors = collectFloorTiles(tiles).filter((tile) => {
+    if (stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r) return false;
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
     // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。上限は過密回避のための family 固有値。
     return dist >= 9 && dist <= 22;
@@ -176,13 +177,15 @@ function chooseEnemySpawns(tiles, playerStart, rng) {
   return enemies;
 }
 
-function buildSourceCells(tiles, radius) {
+function buildSourceCells(tiles, radius, stairsInfo) {
   // source cell を直接出力(adapter 非経由)。
   // 洞窟タイル: structureKind='cave', stable, sightH=pass, sightD=block
   // 外側タイル: structureKind=null, blocked, sightH=block, sightD=block
+  // 階段タイル: 上記洞窟タイルに feature.kind='stairs' を重ねる
   const cells = [];
   for (const tile of tiles.values()) {
     if (tile.terrain === 'floor') {
+      const isStairs = stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r;
       cells.push({
         q: tile.q,
         r: tile.r,
@@ -190,7 +193,15 @@ function buildSourceCells(tiles, radius) {
         sightH: 'pass',
         sightD: 'block',
         structureKind: 'cave',
-        feature: null,
+        feature: isStairs ? {
+          kind: 'stairs',
+          state: 'normal',
+          params: {
+            enterHeading: stairsInfo.enterHeading,
+            exitHeading: stairsInfo.exitHeading,
+            verticalMode: stairsInfo.verticalMode,
+          },
+        } : null,
       });
     } else {
       cells.push({
@@ -207,7 +218,64 @@ function buildSourceCells(tiles, radius) {
   return cells;
 }
 
-export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260415), params = {} }) {
+// 階段の (q, r) / enterHeading / verticalMode を決定する(SPEC §12.5)。
+// stairsConstraint があればそれに従う。なければ: player から離れた floor で、
+// 歩行可能な隣接タイルを持つものをランダム選択。
+function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
+  if (stairsConstraint) {
+    // フロア遷移時の対応階段契約: 指定位置を強制で floor にし、周囲もなるべく floor に。
+    const key = tileKey(stairsConstraint.q, stairsConstraint.r);
+    let tile = tiles.get(key);
+    if (tile) tile.terrain = 'floor';
+    // enterHeading の反対方向(= プレイヤーが降り立つ方向の opposite = 階段に「入る」側)も floor に
+    // しておかないと、プレイヤーが到達できなくなる可能性。exitHeading 方向隣接も floor 必須。
+    const exitOffset = EDGE_DIRECTIONS[stairsConstraint.enterHeading];
+    const exitNeighbor = tiles.get(tileKey(stairsConstraint.q + exitOffset.q, stairsConstraint.r + exitOffset.r));
+    if (exitNeighbor) exitNeighbor.terrain = 'floor';
+    return {
+      q: stairsConstraint.q,
+      r: stairsConstraint.r,
+      enterHeading: stairsConstraint.enterHeading,
+      exitHeading: stairsConstraint.enterHeading,
+      verticalMode: stairsConstraint.verticalMode,
+    };
+  }
+
+  // 初期フロア: player から適度に離れた floor tile を選ぶ
+  const origin = new Hex(playerStart.q, playerStart.r);
+  const floors = collectFloorTiles(tiles).filter((t) => {
+    const d = hexDistance(origin, new Hex(t.q, t.r));
+    return d >= 5 && d <= 15;
+  });
+
+  for (const tile of rng.shuffle(floors)) {
+    const walkableHeadings = [];
+    for (let h = 0; h < 6; h += 1) {
+      const off = EDGE_DIRECTIONS[h];
+      const n = tiles.get(tileKey(tile.q + off.q, tile.r + off.r));
+      if (n && n.terrain === 'floor') walkableHeadings.push(h);
+    }
+    if (walkableHeadings.length === 0) continue;
+    const enterHeading = rng.pick(walkableHeadings);
+    return {
+      q: tile.q,
+      r: tile.r,
+      enterHeading,
+      exitHeading: enterHeading,
+      verticalMode: rng.chance(0.5) ? 'up' : 'down',
+    };
+  }
+  // フォールバック: playerStart 位置に階段(ありえないが防御的に)
+  return {
+    q: playerStart.q,
+    r: playerStart.r,
+    enterHeading: 0,
+    exitHeading: 0,
+    verticalMode: 'down',
+  };
+}
+
+export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260415), params = {}, stairsConstraint = null }) {
   const resolvedParams = {
     floorRate: params.floorRate ?? 0.36,
     loopiness: params.loopiness ?? 0.14,
@@ -220,15 +288,28 @@ export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(2
   addBulges(tiles, rng);
   addLoops(tiles, rng, resolvedParams);
 
-  const playerStart = choosePlayerStart(tiles);
-  const enemies = chooseEnemySpawns(tiles, playerStart, rng);
-  const cells = buildSourceCells(tiles, radius);
+  // フロア遷移時は、階段位置近くからプレイヤーが spawn する必要があるため、
+  // まず stairs を確定させ、それを元に playerStart を決める。
+  let playerStart;
+  let stairsInfo;
+  if (stairsConstraint) {
+    stairsInfo = placeStairsForCave(tiles, { q: 0, r: 0 }, stairsConstraint, rng);
+    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
+    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: stairsInfo.exitHeading };
+  } else {
+    playerStart = choosePlayerStart(tiles);
+    stairsInfo = placeStairsForCave(tiles, playerStart, null, rng);
+  }
+
+  const enemies = chooseEnemySpawns(tiles, playerStart, rng, stairsInfo);
+  const cells = buildSourceCells(tiles, radius, stairsInfo);
 
   return {
     radius,
     cells,
     playerStart,
     enemies,
+    stairs: stairsInfo,
     meta: {
       family: 'cave',
       radius,

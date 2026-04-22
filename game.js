@@ -1,5 +1,5 @@
 import { CONFIG, LOCAL_MOVE_LABELS } from './config.js';
-import { Hex, cloneHex, HEADING_LABELS, getNeighbor } from './hex.js';
+import { Hex, cloneHex, HEADING_LABELS, EDGE_DIRECTIONS, getNeighbor, oppositeHeading } from './hex.js';
 import { allWorldCells, canStandAt, getFeature, setDoorState, setCurrentMapData } from './map.js';
 import { createRng } from './rng.js';
 import { generateCaveMap } from './map-family-cave.js';
@@ -273,6 +273,33 @@ function tryMove(localMove) {
     throw new Error('config not attached to state');
   }
 
+  // 階段上にいる場合の方向別挙動(SPEC §7.4, §9.7):
+  //   heading == exitHeading          → pre-exit 発動 = フロア遷移
+  //   heading == opposite(enterHeading) → 通常の引き返し(下の通常移動ロジックへ)
+  //   その他                           → 壁扱い(通過型階段の「支援されない方向」)
+  const currentFeature = getFeature(state.playerPos);
+  if (currentFeature?.kind === 'stairs') {
+    const stairsParams = currentFeature.params;
+    if (heading === stairsParams.exitHeading) {
+      // pre-exit: 攻撃・移動フェーズをスキップして即フロア遷移。
+      // 意思決定時点の敵 plan は新フロアには持ち越さない(仕様上 enemies は全破棄)。
+      commitFacing();
+      state.turn += 1;
+      pushLog('STAIRS', `Turn ${state.turn}: ${stairsParams.verticalMode === 'up' ? '上り' : '下り'}階段を使用。`);
+      transitionFloor();
+      return;
+    }
+    if (heading !== oppositeHeading(stairsParams.enterHeading)) {
+      // 階段は通過型。enterHeading (= exitHeading) と opposite(enterHeading) の 2 方向以外は壁扱い。
+      commitFacing();
+      state.turn += 1;
+      pushLog('WALL', `Turn ${state.turn}: 階段上から ${LOCAL_MOVE_LABELS[localMove]} 方向へは動けない。`);
+      finishTurn(playerPlan, enemyPlans);
+      return;
+    }
+    // opposite(enterHeading) 方向は通常の移動として処理(下に流れる)
+  }
+
   const outside = Math.max(Math.abs(target.q), Math.abs(target.r), Math.abs(-target.q - target.r)) > state.config.worldRadius;
   if (outside) {
     commitFacing();
@@ -328,6 +355,53 @@ function tryMove(localMove) {
   finishTurn(playerPlan, enemyPlans);
 }
 
+// フロア遷移(SPEC §9.9, §12.5): 旧 state を破棄して対応階段契約で新フロアを生成。
+// HP は引き継ぎ、turn は継続、explored / visible / nearAware / enemies はリセット。
+function transitionFloor() {
+  const oldStairs = getFeature(state.playerPos);
+  if (oldStairs?.kind !== 'stairs') {
+    throw new Error('transitionFloor called off stairs');
+  }
+  const oldEnterHeading = oldStairs.params.enterHeading;
+  const oldVerticalMode = oldStairs.params.verticalMode;
+
+  // 対応階段契約(SPEC §9.9):
+  //   新 verticalMode = 旧の反対
+  //   新 exitHeading = 旧 enterHeading(プレイヤーは来た方向の「続き」に降り立つ)
+  //   通過型なので新 enterHeading = 新 exitHeading
+  const newVerticalMode = oldVerticalMode === 'up' ? 'down' : 'up';
+  const newEnterHeading = oldEnterHeading;
+
+  const stairsConstraint = {
+    q: state.playerPos.q,
+    r: state.playerPos.r,
+    enterHeading: newEnterHeading,
+    verticalMode: newVerticalMode,
+  };
+
+  // 新 seed(疑似乱数)で新マップ生成。同じプリセット(family, params)だが seed は変える。
+  const newSeed = Math.floor(Math.random() * 1_000_000_000) + state.turn;
+  const newRng = createRng(newSeed);
+  const newMap = generateMapFromPreset(state.currentMapId, stairsConstraint, newRng);
+  setCurrentMapData(newMap);
+
+  // プレイヤー再配置(generator が返した playerStart に従う)
+  state.playerPos = new Hex(newMap.playerStart.q, newMap.playerStart.r);
+  state.committedFacing = newMap.playerStart.facing ?? newEnterHeading;
+  state.previewFacing = state.committedFacing;
+
+  // 状態リセット(HP / maxHP / turn は引き継ぎ)
+  state.enemies = buildEnemiesFromEntries(newMap.enemies);
+  state.visible = new Set();
+  state.nearAware = new Set();
+  state.explored = new Set();
+
+  refreshVisibility();
+  updateEnemyAwareness(state, { pushLog });
+  render(state);
+  pushLog('FLOOR', `新フロア生成。階段(${stairsConstraint.q},${stairsConstraint.r})の verticalMode=${newVerticalMode}、exitHeading=${newEnterHeading}。`);
+}
+
 function waitAction() {
   if (state.gameOver) {
     return;
@@ -373,19 +447,31 @@ function getGeneratedPreset(mapId = null) {
   return generatedMaps[resolvedId] ?? generatedMaps[state.config.defaultGeneratedMapId] ?? null;
 }
 
-function generateMapFromPreset(mapId) {
+function generateMapByFamily(family, { radius, rng, params = {}, stairsConstraint = null }) {
+  if (family === 'cave_natural') {
+    return generateNaturalCaveMap({ radius, rng, params, stairsConstraint });
+  }
+  if (family === 'rooms_classic') {
+    return generateClassicRoomsMap({ radius, rng, params, stairsConstraint });
+  }
+  return generateCaveMap({ radius, rng, params, stairsConstraint });
+}
+
+function generateMapFromPreset(mapId, stairsConstraint = null, rngOverride = null) {
   const preset = getGeneratedPreset(mapId);
   if (!preset) {
     throw new Error(`Unknown generated map preset: ${mapId}`);
   }
-  const rng = createRng(preset.seed ?? 12345);
-  if (preset.family === 'cave_natural') {
-    return generateNaturalCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
-  }
-  if (preset.family === 'rooms_classic') {
-    return generateClassicRoomsMap({ radius: state.config.worldRadius, rng, params: { seed: preset.seed ?? 12345, ...(preset.params ?? {}) } });
-  }
-  return generateCaveMap({ radius: state.config.worldRadius, rng, params: preset.params ?? {} });
+  const rng = rngOverride ?? createRng(preset.seed ?? 12345);
+  const params = preset.family === 'rooms_classic'
+    ? { seed: preset.seed ?? 12345, ...(preset.params ?? {}) }
+    : (preset.params ?? {});
+  return generateMapByFamily(preset.family, {
+    radius: state.config.worldRadius,
+    rng,
+    params,
+    stairsConstraint,
+  });
 }
 
 function buildGeneratedMapLabel(mapId) {

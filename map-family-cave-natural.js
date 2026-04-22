@@ -150,9 +150,10 @@ function choosePlayerStart(tiles) {
   return { q: choice.q, r: choice.r, facing: 0 };
 }
 
-function chooseEnemySpawns(tiles, playerStart, rng) {
+function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
   const origin = new Hex(playerStart.q, playerStart.r);
   const floors = collectFloorTiles(tiles).filter((tile) => {
+    if (stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r) return false;
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
     // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。上限は家族別の調整値。
     return dist >= 8 && dist <= 24;
@@ -178,10 +179,11 @@ function chooseEnemySpawns(tiles, playerStart, rng) {
   return enemies;
 }
 
-function buildSourceCells(tiles) {
+function buildSourceCells(tiles, stairsInfo) {
   const cells = [];
   for (const tile of tiles.values()) {
     if (tile.terrain === 'floor') {
+      const isStairs = stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r;
       cells.push({
         q: tile.q,
         r: tile.r,
@@ -189,7 +191,15 @@ function buildSourceCells(tiles) {
         sightH: 'pass',
         sightD: 'block',
         structureKind: 'cave',
-        feature: null,
+        feature: isStairs ? {
+          kind: 'stairs',
+          state: 'normal',
+          params: {
+            enterHeading: stairsInfo.enterHeading,
+            exitHeading: stairsInfo.exitHeading,
+            verticalMode: stairsInfo.verticalMode,
+          },
+        } : null,
       });
     } else {
       cells.push({
@@ -206,6 +216,53 @@ function buildSourceCells(tiles) {
   return cells;
 }
 
+function placeStairsForNaturalCave(tiles, playerStart, stairsConstraint, rng) {
+  if (stairsConstraint) {
+    const key = tileKey(stairsConstraint.q, stairsConstraint.r);
+    const tile = tiles.get(key);
+    if (tile) tile.terrain = 'floor';
+    const off = EDGE_DIRECTIONS[stairsConstraint.enterHeading];
+    const neighbor = tiles.get(tileKey(stairsConstraint.q + off.q, stairsConstraint.r + off.r));
+    if (neighbor) neighbor.terrain = 'floor';
+    return {
+      q: stairsConstraint.q,
+      r: stairsConstraint.r,
+      enterHeading: stairsConstraint.enterHeading,
+      exitHeading: stairsConstraint.enterHeading,
+      verticalMode: stairsConstraint.verticalMode,
+    };
+  }
+  const origin = new Hex(playerStart.q, playerStart.r);
+  const floors = collectFloorTiles(tiles).filter((t) => {
+    const d = hexDistance(origin, new Hex(t.q, t.r));
+    return d >= 5 && d <= 15;
+  });
+  for (const tile of rng.shuffle(floors)) {
+    const walkableHeadings = [];
+    for (let h = 0; h < 6; h += 1) {
+      const off = EDGE_DIRECTIONS[h];
+      const n = tiles.get(tileKey(tile.q + off.q, tile.r + off.r));
+      if (n && n.terrain === 'floor') walkableHeadings.push(h);
+    }
+    if (walkableHeadings.length === 0) continue;
+    const enterHeading = rng.pick(walkableHeadings);
+    return {
+      q: tile.q,
+      r: tile.r,
+      enterHeading,
+      exitHeading: enterHeading,
+      verticalMode: rng.chance(0.5) ? 'up' : 'down',
+    };
+  }
+  return {
+    q: playerStart.q,
+    r: playerStart.r,
+    enterHeading: 0,
+    exitHeading: 0,
+    verticalMode: 'down',
+  };
+}
+
 function generateNaturalAttempt(radius, rng, params) {
   const tiles = initRandomTiles(radius, rng, params);
   smoothTiles(tiles, radius, params.smoothPasses);
@@ -215,7 +272,7 @@ function generateNaturalAttempt(radius, rng, params) {
   return tiles;
 }
 
-export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260418), params = {} }) {
+export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260418), params = {}, stairsConstraint = null }) {
   const resolvedParams = { fillProb: params.fillProb ?? 0.49, smoothPasses: params.smoothPasses ?? 5, loopOpenings: params.loopOpenings ?? 2, minFloorCount: params.minFloorCount ?? 300 };
   let bestTiles = null;
   let bestFloorCount = -1;
@@ -231,14 +288,26 @@ export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = crea
       break;
     }
   }
-  const playerStart = choosePlayerStart(bestTiles);
-  const enemies = chooseEnemySpawns(bestTiles, playerStart, rng);
-  const cells = buildSourceCells(bestTiles);
+
+  let playerStart;
+  let stairsInfo;
+  if (stairsConstraint) {
+    stairsInfo = placeStairsForNaturalCave(bestTiles, { q: 0, r: 0 }, stairsConstraint, rng);
+    const off = EDGE_DIRECTIONS[stairsInfo.exitHeading];
+    playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: stairsInfo.exitHeading };
+  } else {
+    playerStart = choosePlayerStart(bestTiles);
+    stairsInfo = placeStairsForNaturalCave(bestTiles, playerStart, null, rng);
+  }
+
+  const enemies = chooseEnemySpawns(bestTiles, playerStart, rng, stairsInfo);
+  const cells = buildSourceCells(bestTiles, stairsInfo);
   return {
     radius,
     cells,
     playerStart,
     enemies,
+    stairs: stairsInfo,
     meta: { family: 'cave_natural', radius, floorCount: collectFloorTiles(bestTiles).length, params: resolvedParams },
   };
 }

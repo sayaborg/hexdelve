@@ -1,13 +1,26 @@
+import { CONFIG } from './config.js';
 import { EDGE_DIRECTIONS, getNeighbor, hexDistance } from './hex.js';
-import { canStandAt } from './map.js';
+import { canStandAt, getFeature } from './map.js';
 import { bestFacingToward, computePerception } from './perception.js';
 
-function stepToward(from, to) {
+// AI profile を参照して、階段を避ける敵かどうか判定(SPEC §10.5)。
+// v0 default_ai は avoidsStairs=true なので、全敵が階段タイルに進入しない。
+function shouldAvoidStairs(enemy) {
+  return !!CONFIG.aiProfiles[enemy.ai]?.avoidsStairs;
+}
+
+function isStairsTile(hex) {
+  return getFeature(hex)?.kind === 'stairs';
+}
+
+function stepToward(from, to, enemy) {
+  const avoidStairs = shouldAvoidStairs(enemy);
   let best = null;
   let bestDistance = Infinity;
   for (let heading = 0; heading < EDGE_DIRECTIONS.length; heading += 1) {
     const next = getNeighbor(from, heading);
     if (!canStandAt(next)) continue;
+    if (avoidStairs && isStairsTile(next)) continue;
     const distance = hexDistance(next, to);
     if (distance < bestDistance) {
       best = { next, heading };
@@ -18,11 +31,13 @@ function stepToward(from, to) {
 }
 
 function choosePatrolStep(enemy, occupied) {
+  const avoidStairs = shouldAvoidStairs(enemy);
   const priority = [0, -1, 1, -2, 2, 3];
   for (const delta of priority) {
     const heading = (enemy.facing + delta + 6) % 6;
     const candidate = getNeighbor(enemy.pos, heading);
     if (!canStandAt(candidate)) continue;
+    if (avoidStairs && isStairsTile(candidate)) continue;
     if (occupied.has(candidate.key())) continue;
     return { next: candidate, heading };
   }
@@ -71,7 +86,7 @@ export function planEnemyActions(state) {
     }
 
     if ((enemy.mode === 'chase' || enemy.mode === 'investigate') && enemy.lastSeenPlayerPos) {
-      const move = stepToward(enemy.pos, enemy.lastSeenPlayerPos);
+      const move = stepToward(enemy.pos, enemy.lastSeenPlayerPos, enemy);
       if (!move) {
         return { enemyId: enemy.id, type: 'wait' };
       }
@@ -87,7 +102,7 @@ export function planEnemyActions(state) {
       if (enemy.pos.equals(enemy.homePos)) {
         return { enemyId: enemy.id, type: 'wait', facing: enemy.homeFacing ?? enemy.facing };
       }
-      const move = stepToward(enemy.pos, enemy.homePos);
+      const move = stepToward(enemy.pos, enemy.homePos, enemy);
       if (!move) {
         return { enemyId: enemy.id, type: 'wait' };
       }
