@@ -95,8 +95,8 @@ export function isWithinFOV(source, target, facing, halfAngleDeg) {
   const targetPx = getWorldCenter(target);
   const facingPx = getWorldCenter(EDGE_DIRECTIONS[facing]);
   const toTarget = normalizeVector(targetPx.x - sourcePx.x, targetPx.y - sourcePx.y);
-  const facing = normalizeVector(facingPx.x, facingPx.y);
-  const dot = toTarget.x * facing.x + toTarget.y * facing.y;
+  const facingVec = normalizeVector(facingPx.x, facingPx.y);
+  const dot = toTarget.x * facingVec.x + toTarget.y * facingVec.y;
   const threshold = Math.cos((halfAngleDeg * Math.PI) / 180);
   return dot >= threshold - 1e-9;
 }
@@ -181,19 +181,19 @@ export function bestFacingToward(from, target) {
   const fromPx = getWorldCenter(from);
   const targetPx = getWorldCenter(target);
   const toTarget = normalizeVector(targetPx.x - fromPx.x, targetPx.y - fromPx.y);
-  let bestDir = 0;
+  let bestHeading = 0;
   let bestDot = -Infinity;
 
   for (let heading = 0; heading < 6; heading += 1) {
     const angleDeg = HEADING_ANGLES_DEG[heading];
     const angleRad = (angleDeg * Math.PI) / 180;
-    const facing = { x: Math.cos(angleRad), y: Math.sin(angleRad) };
-    const dot = toTarget.x * facing.x + toTarget.y * facing.y;
+    const facingVec = { x: Math.cos(angleRad), y: Math.sin(angleRad) };
+    const dot = toTarget.x * facingVec.x + toTarget.y * facingVec.y;
     if (dot > bestDot) {
       bestDot = dot;
-      bestDir = heading;
+      bestHeading = heading;
     }
   }
 
-  return bestDir;
+  return bestHeading;
 }

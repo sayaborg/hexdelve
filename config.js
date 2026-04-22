@@ -80,6 +80,7 @@ export const CONFIG = {
   // プレイヤー定数(SPEC §11.1)。
   player: {
     hp: 8,
+    maxHp: 8,
     wt: 10,
     damage: 1,
     perception: 'player_perception',

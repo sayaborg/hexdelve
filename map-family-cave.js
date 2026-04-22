@@ -1,3 +1,4 @@
+import { CONFIG } from './config.js';
 import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
 import { createRng } from './rng.js';
 
@@ -175,17 +176,38 @@ function chooseEnemySpawns(tiles, playerStart, rng) {
   return enemies;
 }
 
-function buildFloorSet(tiles) {
-  const floor = new Set();
+function buildSourceCells(tiles, radius) {
+  // source cell を直接出力(adapter 非経由)。
+  // 洞窟タイル: structureKind='cave', stable, sightH=pass, sightD=block
+  // 外側タイル: structureKind=null, blocked, sightH=block, sightD=block
+  const cells = [];
   for (const tile of tiles.values()) {
     if (tile.terrain === 'floor') {
-      floor.add(tileKey(tile.q, tile.r));
+      cells.push({
+        q: tile.q,
+        r: tile.r,
+        support: 'stable',
+        sightH: 'pass',
+        sightD: 'block',
+        structureKind: 'cave',
+        feature: null,
+      });
+    } else {
+      cells.push({
+        q: tile.q,
+        r: tile.r,
+        support: 'blocked',
+        sightH: 'block',
+        sightD: 'block',
+        structureKind: null,
+        feature: null,
+      });
     }
   }
-  return floor;
+  return cells;
 }
 
-export function generateCaveMap({ radius, rng = createRng(20260415), params = {} }) {
+export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260415), params = {} }) {
   const resolvedParams = {
     floorRate: params.floorRate ?? 0.36,
     loopiness: params.loopiness ?? 0.14,
@@ -200,9 +222,11 @@ export function generateCaveMap({ radius, rng = createRng(20260415), params = {}
 
   const playerStart = choosePlayerStart(tiles);
   const enemies = chooseEnemySpawns(tiles, playerStart, rng);
+  const cells = buildSourceCells(tiles, radius);
 
   return {
-    floor: buildFloorSet(tiles),
+    radius,
+    cells,
     playerStart,
     enemies,
     meta: {

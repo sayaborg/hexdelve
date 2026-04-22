@@ -1,3 +1,4 @@
+import { CONFIG } from './config.js';
 import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld } from './hex.js';
 import { createRng } from './rng.js';
 
@@ -153,26 +154,56 @@ function chooseEnemySpawns(tiles, playerStart, rng) {
   const origin = new Hex(playerStart.q, playerStart.r);
   const floors = collectFloorTiles(tiles).filter((tile) => {
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
+    // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。上限は家族別の調整値。
     return dist >= 8 && dist <= 24;
   });
   const shuffled = rng.shuffle(floors);
+  const count = rng.int(3, 5);
+  const [wtMin, wtMax] = CONFIG.enemyKinds.watcher.wtRange;
   const enemies = [];
   for (const tile of shuffled) {
+    if (enemies.length >= count) break;
     const pos = new Hex(tile.q, tile.r);
     const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
     if (tooClose) continue;
-    enemies.push({ id: `n${enemies.length + 1}`, name: 'Watcher', q: tile.q, r: tile.r, facing: rng.int(0, 5), profile: 'watcher', wt: 10 + enemies.length });
-    if (enemies.length >= 3) break;
+    enemies.push({
+      id: `n${enemies.length + 1}`,
+      kind: 'watcher',
+      q: tile.q,
+      r: tile.r,
+      facing: rng.int(0, 5),
+      wt: rng.int(wtMin, wtMax),
+    });
   }
   return enemies;
 }
 
-function buildFloorSet(tiles) {
-  const floor = new Set();
+function buildSourceCells(tiles) {
+  const cells = [];
   for (const tile of tiles.values()) {
-    if (tile.terrain === 'floor') floor.add(tileKey(tile.q, tile.r));
+    if (tile.terrain === 'floor') {
+      cells.push({
+        q: tile.q,
+        r: tile.r,
+        support: 'stable',
+        sightH: 'pass',
+        sightD: 'block',
+        structureKind: 'cave',
+        feature: null,
+      });
+    } else {
+      cells.push({
+        q: tile.q,
+        r: tile.r,
+        support: 'blocked',
+        sightH: 'block',
+        sightD: 'block',
+        structureKind: null,
+        feature: null,
+      });
+    }
   }
-  return floor;
+  return cells;
 }
 
 function generateNaturalAttempt(radius, rng, params) {
@@ -184,7 +215,7 @@ function generateNaturalAttempt(radius, rng, params) {
   return tiles;
 }
 
-export function generateNaturalCaveMap({ radius, rng = createRng(20260418), params = {} }) {
+export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = createRng(20260418), params = {} }) {
   const resolvedParams = { fillProb: params.fillProb ?? 0.49, smoothPasses: params.smoothPasses ?? 5, loopOpenings: params.loopOpenings ?? 2, minFloorCount: params.minFloorCount ?? 300 };
   let bestTiles = null;
   let bestFloorCount = -1;
@@ -202,5 +233,12 @@ export function generateNaturalCaveMap({ radius, rng = createRng(20260418), para
   }
   const playerStart = choosePlayerStart(bestTiles);
   const enemies = chooseEnemySpawns(bestTiles, playerStart, rng);
-  return { floor: buildFloorSet(bestTiles), playerStart, enemies, meta: { family: 'cave_natural', radius, floorCount: collectFloorTiles(bestTiles).length, params: resolvedParams } };
+  const cells = buildSourceCells(bestTiles);
+  return {
+    radius,
+    cells,
+    playerStart,
+    enemies,
+    meta: { family: 'cave_natural', radius, floorCount: collectFloorTiles(bestTiles).length, params: resolvedParams },
+  };
 }

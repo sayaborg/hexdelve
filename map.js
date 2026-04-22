@@ -1,6 +1,5 @@
 import { CONFIG } from './config.js';
 import { Hex, generateHexDisk } from './hex.js';
-import { convertFloorSetToSourceMap } from './map-adapter-v1.js';
 import { compileMap } from './map-compile.js';
 import { createSourceMap, getSourceCell } from './map-source.js';
 
@@ -20,18 +19,12 @@ function compileRuntimeMap(mapData) {
     return compileMap(sourceMap);
   }
 
-  if (mapData?.floor) {
-    // cave 系 generator が floor: Set<key> を返す暫定経路。
-    // Phase 2 で cave 系を source cell 直接出力化したらこの分岐と map-adapter-v1.js は廃止。
-    const sourceMap = convertFloorSetToSourceMap({
-      radius: mapData.meta?.radius ?? CONFIG.worldRadius,
-      floor: mapData.floor,
-      meta: mapData.meta ?? {},
-    });
-    return compileMap(sourceMap);
-  }
-
-  return compileMap(convertFloorSetToSourceMap({ radius: CONFIG.worldRadius, floor: new Set(), meta: { family: 'empty' } }));
+  // mapData が未指定 / 不正な場合は空マップ(全タイル blocked 相当)を返す。
+  return compileMap(createSourceMap({
+    radius: CONFIG.worldRadius,
+    cells: [],
+    meta: { family: 'empty' },
+  }));
 }
 
 let currentMapData = compileRuntimeMap(null);
