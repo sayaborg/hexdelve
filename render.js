@@ -99,6 +99,7 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       threshold: { fill: '#436177', stroke: '#6a8ba3' },
       wall: { fill: CONFIG.colors.wallVisible, stroke: CONFIG.colors.wallVisibleStroke },
       doorClosed: { fill: '#6a5531', stroke: '#b59554' },
+      doorLocked: { fill: '#7a2f3a', stroke: '#c55763' },
       doorOpen: { fill: '#2f6a5a', stroke: '#61a890' },
     },
     near: {
@@ -107,6 +108,7 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       threshold: { fill: '#4a5165', stroke: '#727a92' },
       wall: { fill: CONFIG.colors.wallNear, stroke: CONFIG.colors.wallNearStroke },
       doorClosed: { fill: '#62513b', stroke: '#8f7756' },
+      doorLocked: { fill: '#6a3138', stroke: '#a04753' },
       doorOpen: { fill: '#31584e', stroke: '#4d8274' },
     },
     known: {
@@ -115,18 +117,28 @@ function getSemanticPalette(sourceCell, feature, canStand, mode) {
       threshold: { fill: '#2a3a47', stroke: '#445563' },
       wall: { fill: CONFIG.colors.wallKnown, stroke: CONFIG.colors.wallKnownStroke },
       doorClosed: { fill: '#544633', stroke: '#7b6a50' },
+      doorLocked: { fill: '#522a31', stroke: '#7a4048' },
       doorOpen: { fill: '#25483f', stroke: '#416a5f' },
     },
   };
 
   const palette = palettes[mode];
   if (feature?.kind === 'door') {
-    return feature.state === 'open' ? palette.doorOpen : palette.doorClosed;
+    if (feature.state === 'open') return palette.doorOpen;
+    if (feature.state === 'locked') return palette.doorLocked;
+    return palette.doorClosed;
   }
   if (!sourceCell || !canStand) return palette.wall;
   if (sourceCell.structureKind === 'corridor') return palette.corridor;
   if (sourceCell.structureKind === 'threshold') return palette.threshold;
   return palette.room;
+}
+
+function doorLabelFor(feature) {
+  if (feature?.kind !== 'door') return null;
+  if (feature.state === 'open') return null;
+  if (feature.state === 'locked') return 'L';
+  return 'D';
 }
 
 function getCellPaint(cell, state) {
@@ -144,7 +156,7 @@ function getCellPaint(cell, state) {
 
   const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
   const palette = getSemanticPalette(sourceCell, feature, canStand, mode);
-  const label = isVisible && feature?.kind === 'door' ? 'D' : null;
+  const label = isVisible ? doorLabelFor(feature) : null;
   const labelColor = mode === 'visible' ? CONFIG.colors.text : CONFIG.colors.muted;
   return {
     fill: palette.fill,

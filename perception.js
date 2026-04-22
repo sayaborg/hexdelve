@@ -9,7 +9,7 @@ import {
   isInsideWorld,
   pixelToHex,
 } from './hex.js';
-import { allWorldCells, isOpaque } from './map.js';
+import { allWorldCells, blocksSightH } from './map.js';
 
 export function getWorldCenter(hex) {
   return hexToPixel(hex, 1, 0, 0);
@@ -72,7 +72,7 @@ export function hasLOS(source, target) {
       if (cell.equals(target)) {
         return true;
       }
-      if (isOpaque(cell)) {
+      if (blocksSightH(cell)) {
         blocked = true;
         break;
       }

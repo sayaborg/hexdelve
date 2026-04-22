@@ -1,6 +1,6 @@
 import { CONFIG, LOCAL_MOVE_LABELS } from './config.js';
 import { Hex, cloneHex, HEADING_LABELS, getNeighbor } from './hex.js';
-import { allWorldCells, isFloor, setCurrentMapData } from './map.js';
+import { allWorldCells, canStandAt, getFeature, setDoorState, setCurrentMapData } from './map.js';
 import { createRng } from './rng.js';
 import { generateCaveMap } from './map-family-cave.js';
 import { generateNaturalCaveMap } from './map-family-cave-natural.js';
@@ -128,7 +128,7 @@ function buildMoveCandidates(playerPlan, enemyPlans) {
 
   if (!state.gameOver && playerPlan.type === 'move' && playerPlan.target) {
     const targetKey = playerPlan.target.key();
-    if (!startOccupied.has(targetKey) && isFloor(playerPlan.target)) {
+    if (!startOccupied.has(targetKey) && canStandAt(playerPlan.target)) {
       candidates.push({
         actorType: 'player',
         actorId: 'player',
@@ -145,7 +145,7 @@ function buildMoveCandidates(playerPlan, enemyPlans) {
     const enemy = state.enemies.find((entry) => entry.id === plan.enemyId) || null;
     if (!enemy || enemy.hp <= 0) continue;
     const targetKey = plan.target.key();
-    if (startOccupied.has(targetKey) || !isFloor(plan.target)) continue;
+    if (startOccupied.has(targetKey) || !canStandAt(plan.target)) continue;
     candidates.push({
       actorType: 'enemy',
       actorId: enemy.id,
@@ -269,15 +269,14 @@ function tryMove(localMove) {
   const target = getNeighbor(state.playerPos, heading);
   let playerPlan = { type: 'wait' };
 
-  commitFacing();
-  state.turn += 1;
-
   if (!state.config || !state.config.worldRadius) {
     throw new Error('config not attached to state');
   }
 
   const outside = Math.max(Math.abs(target.q), Math.abs(target.r), Math.abs(-target.q - target.r)) > state.config.worldRadius;
   if (outside) {
+    commitFacing();
+    state.turn += 1;
     pushLog('EDGE', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、世界外のため進めない。`);
     finishTurn(playerPlan, enemyPlans);
     return;
@@ -285,17 +284,46 @@ function tryMove(localMove) {
 
   const enemy = state.enemies.find((e) => e.pos.equals(target)) || null;
   if (enemy) {
+    commitFacing();
+    state.turn += 1;
     playerPlan = { type: 'attack', enemyId: enemy.id, localMove };
     finishTurn(playerPlan, enemyPlans);
     return;
   }
 
-  if (!isFloor(target)) {
+  // pre-enter アクション(SPEC §5, §9.6, TURN_RULES §4.4):
+  //   target が effective=blocked かつ feature=door の場合、feature state により挙動分岐。
+  //   closed → open に変更して 1 ターン消費、プレイヤー位置不変。
+  //   locked → ログのみ出してターン消費なし(v0 では解錠手段がないため親切仕様)。
+  const targetFeature = getFeature(target);
+  if (!canStandAt(target, heading) && targetFeature?.kind === 'door') {
+    if (targetFeature.state === 'closed') {
+      commitFacing();
+      state.turn += 1;
+      setDoorState(target, 'open');
+      pushLog('DOOR', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} のドアを開けた。`);
+      finishTurn(playerPlan, enemyPlans);
+      return;
+    }
+    if (targetFeature.state === 'locked') {
+      commitFacing();
+      // ターン消費なし。仮向きを確定向きに反映するだけ。
+      pushLog('DOOR', `${LOCAL_MOVE_LABELS[localMove]} のドアには鍵がかかっている。`);
+      render(state);
+      return;
+    }
+  }
+
+  if (!canStandAt(target, heading)) {
+    commitFacing();
+    state.turn += 1;
     pushLog('WALL', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、q:${target.q} r:${target.r} は壁。`);
     finishTurn(playerPlan, enemyPlans);
     return;
   }
 
+  commitFacing();
+  state.turn += 1;
   playerPlan = { type: 'move', target, localMove };
   finishTurn(playerPlan, enemyPlans);
 }

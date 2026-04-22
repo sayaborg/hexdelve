@@ -1,5 +1,5 @@
 import { EDGE_DIRECTIONS, getNeighbor, hexDistance } from './hex.js';
-import { isFloor } from './map.js';
+import { canStandAt } from './map.js';
 import { bestFacingToward, computePerception } from './perception.js';
 
 function stepToward(from, to) {
@@ -7,7 +7,7 @@ function stepToward(from, to) {
   let bestDistance = Infinity;
   for (let heading = 0; heading < EDGE_DIRECTIONS.length; heading += 1) {
     const next = getNeighbor(from, heading);
-    if (!isFloor(next)) continue;
+    if (!canStandAt(next)) continue;
     const distance = hexDistance(next, to);
     if (distance < bestDistance) {
       best = { next, heading };
@@ -22,7 +22,7 @@ function choosePatrolStep(enemy, occupied) {
   for (const delta of priority) {
     const heading = (enemy.facing + delta + 6) % 6;
     const candidate = getNeighbor(enemy.pos, heading);
-    if (!isFloor(candidate)) continue;
+    if (!canStandAt(candidate)) continue;
     if (occupied.has(candidate.key())) continue;
     return { next: candidate, heading };
   }

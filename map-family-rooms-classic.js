@@ -133,8 +133,11 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
 
   for (const room of rooms) addRoomDisk(cellMap, room.center, room.radius, room.id);
 
-  // 1 つの外部屋の出口だけ closed ドアにする(v0 テスト用)。
-  const closedDoorRoomId = rooms[rooms.length - 1].id;
+  // v0 動作確認用: 外部屋のうち 1 つの出口を closed ドア、もう 1 つを locked ドアにする。
+  // 3 部屋(外 2 つ)なら 1 つずつ、4 部屋(外 3 つ)なら 1 つは扉なし。
+  const outerRooms = rooms.slice(1);
+  const closedDoorRoomId = outerRooms[0]?.id ?? null;
+  const lockedDoorRoomId = outerRooms[1]?.id ?? null;
 
   for (const room of rooms.slice(1)) {
     const entry = axialStep(centerRoom.center, room.heading, 3);
@@ -162,12 +165,17 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
       feature: null,
       meta: { roomId: centerRoom.id },
     });
+
+    let doorState = null;
+    if (room.id === closedDoorRoomId) doorState = 'closed';
+    else if (room.id === lockedDoorRoomId) doorState = 'locked';
+
     addCell(cellMap, exit, {
       support: 'stable',
       sightH: 'pass',
       sightD: 'block',
       structureKind: 'threshold',
-      feature: room.id === closedDoorRoomId ? { kind: 'door', state: 'closed', params: {} } : null,
+      feature: doorState ? { kind: 'door', state: doorState, params: {} } : null,
       meta: { roomId: room.id },
     });
   }
