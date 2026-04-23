@@ -65,6 +65,51 @@ function drawEnemyFacing(ctx, centerX, centerY, facing) {
   drawFacingArrow(ctx, centerX, centerY, HEADING_ANGLES_DEG[facing], '#ffe3e3', 12);
 }
 
+// 階段の進入口辺(enterHeading)と出口辺(exitHeading)を強調描画する。
+// SPEC §8.6 + 設計判断 D6(CHANGELOG フェーズ 34):
+//   - 中央アイコンは verticalMode(↑/↓)、辺マークは進入/出口の向き情報
+//   - 通過型(enterHeading == exitHeading、v0 標準)は同一辺を「通過辺」として太線強調
+//   - 非通過型(v1+ 想定)は enter 辺=緑、exit 辺=黄で色分け
+//   - visible タイルのみに描画(known / nearAware では中央アイコンだけ、方向情報は再確認が必要)
+//
+// 辺の描画: edge N の両端は polygonCorners の index (N+4)%6 と (N+5)%6。
+//   edge 0 (N) mid = (0, -√3/2) で画面上向き、この規則は GLOSSARY §1 と一致。
+function drawStairsEdges(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+  const feature = getFeature(cell);
+  if (feature?.kind !== 'stairs') return;
+  if (!state.visible.has(cell.key())) return;
+
+  const enterHeading = feature.params?.enterHeading;
+  const exitHeading = feature.params?.exitHeading;
+  if (typeof enterHeading !== 'number' || typeof exitHeading !== 'number') return;
+
+  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+  const corners = polygonCorners(pixel.x, pixel.y, tileRadius - 1);
+  const lineWidth = Math.max(3, tileRadius * 0.18);
+
+  const drawEdge = (edgeIndex, color) => {
+    const a = corners[(edgeIndex + 4) % 6];
+    const b = corners[(edgeIndex + 5) % 6];
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  };
+
+  if (enterHeading === exitHeading) {
+    // 通過型: 進入口と出口が同一辺。プレイヤーはこの辺を通って「階段に入る」
+    // 「昇降する(= 元の進行方向で出る)」の両方を実行する。
+    drawEdge(enterHeading, CONFIG.colors.preview);  // 緑(視野軸と同系統)
+  } else {
+    // 非通過型(v1+): enter = 緑、exit = 黄
+    drawEdge(enterHeading, CONFIG.colors.preview);
+    drawEdge(exitHeading, CONFIG.colors.player);
+  }
+}
+
 
 function aiModeBadge(mode) {
   return {
@@ -282,6 +327,11 @@ export function renderMain(state) {
 
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
+    drawStairsEdges(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
+  }
+
+  for (const cell of cells) {
+    const drawHexCoord = cell.subtract(state.playerPos);
     drawEntityOverlay(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
   }
 
@@ -306,6 +356,10 @@ export function renderSub(state) {
 
   for (const cell of state.allWorldCells) {
     drawCellBase(ctx, cell, cell, tileRadius, originX, originY, 8, state);
+  }
+
+  for (const cell of state.allWorldCells) {
+    drawStairsEdges(ctx, cell, cell, tileRadius, originX, originY, state);
   }
 
   for (const cell of state.allWorldCells) {

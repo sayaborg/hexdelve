@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>HEX版NetHack風ローグライク - Split Prototype</title>
+  <title>HEX 版 NetHack 風ローグライク(v0)</title>
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <div class="app">
     <section class="header">
-      <h1>HEX版NetHack風ローグライク - Split Prototype</h1>
+      <h1>HEX 版 NetHack 風ローグライク(v0)</h1>
       <p>
         Hex ロジック座標は <strong>q / r</strong> を用いる。向きは常に<strong>ヘックスの辺方向</strong>で表す。<br>
         視覚は <strong>120度FOV + LOS</strong>、隣接 6 マスは <strong>近接知覚</strong> とする。<br>
@@ -32,10 +32,14 @@
           <span class="chip"><span class="swatch" style="background:#2a2940"></span>近接知覚の床</span>
           <span class="chip"><span class="swatch" style="background:#3b4b5d"></span>可視の壁</span>
           <span class="chip"><span class="swatch" style="background:#1f394f"></span>可視の床</span>
+          <span class="chip"><span class="swatch" style="background:#6a5531"></span>閉じたドア(D)</span>
+          <span class="chip"><span class="swatch" style="background:#7a2f3a"></span>施錠ドア(L)</span>
+          <span class="chip"><span class="swatch" style="background:#2f6a5a"></span>開いたドア</span>
+          <span class="chip"><span class="swatch" style="background:#4e4b75"></span>階段(↑上り / ↓下り)</span>
           <span class="chip"><span class="swatch" style="background:#ffd166"></span>プレイヤー</span>
           <span class="chip"><span class="swatch" style="background:#ff6b6b"></span>敵</span>
           <span class="chip"><span class="swatch" style="background:#ff7b72"></span>向き矢印</span>
-          <span class="chip"><span class="swatch" style="background:#9be564"></span>仮向き / 視野軸</span>
+          <span class="chip"><span class="swatch" style="background:#9be564"></span>仮向き / 階段通過辺</span>
         </div>
       </div>
 

@@ -1,9 +1,85 @@
 import { CONFIG } from './config.js';
-import { Hex, EDGE_DIRECTIONS, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
+import { Hex, EDGE_DIRECTIONS, cubeRound, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
 
 function tileKey(q, r) {
   return `${q},${r}`;
+}
+
+// 最大の floor 連結成分を BFS で抽出する。
+// stairsConstraint で強制配置した階段がメイン成分から切り離されている場合の
+// 連結性保証(設計判断 D2 の副産物、STATUS の既知制約を v0 で解消)。
+function findMainFloorComponent(tiles) {
+  const visited = new Set();
+  let largest = [];
+  for (const tile of tiles.values()) {
+    if (tile.terrain !== 'floor') continue;
+    const startKey = tileKey(tile.q, tile.r);
+    if (visited.has(startKey)) continue;
+    const component = [];
+    const queue = [tile];
+    visited.add(startKey);
+    while (queue.length) {
+      const cur = queue.shift();
+      component.push(cur);
+      for (const h of EDGE_DIRECTIONS) {
+        const nk = tileKey(cur.q + h.q, cur.r + h.r);
+        if (visited.has(nk)) continue;
+        const nb = tiles.get(nk);
+        if (!nb || nb.terrain !== 'floor') continue;
+        visited.add(nk);
+        queue.push(nb);
+      }
+    }
+    if (component.length > largest.length) largest = component;
+  }
+  return largest;
+}
+
+// hex 上の 2 点を結ぶ直線経路(端点含む)。
+function hexLine(a, b) {
+  const N = hexDistance(a, b);
+  const line = [];
+  for (let i = 0; i <= N; i += 1) {
+    const t = N === 0 ? 0 : i / N;
+    const qf = a.q + (b.q - a.q) * t;
+    const rf = a.r + (b.r - a.r) * t;
+    line.push(cubeRound(qf, rf));
+  }
+  return line;
+}
+
+// 階段タイル(および必要なら spawn 隣接)がメイン連結成分に含まれない場合、
+// メイン成分の最寄りタイルまで hex line で wall を floor に掘って連結を保証する。
+function carveCorridorToMainComponent(tiles, stairsHex, spawnHex) {
+  const main = findMainFloorComponent(tiles);
+  const mainSet = new Set(main.map((t) => tileKey(t.q, t.r)));
+  const stairsKey = tileKey(stairsHex.q, stairsHex.r);
+
+  // 階段とその spawn 隣接の両方が既にメイン成分にあれば何もしない
+  if (mainSet.has(stairsKey) && (!spawnHex || mainSet.has(tileKey(spawnHex.q, spawnHex.r)))) {
+    return;
+  }
+  if (!main.length) return;  // メイン成分が空(ほぼあり得ない)
+
+  // 階段から最も近いメイン成分タイルを探す
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const t of main) {
+    const d = hexDistance(stairsHex, new Hex(t.q, t.r));
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = t;
+    }
+  }
+  if (!nearest) return;
+
+  // 経路上のタイルを floor 化(world 内のみ)
+  for (const step of hexLine(stairsHex, new Hex(nearest.q, nearest.r))) {
+    if (!isInsideWorld(step, CONFIG.worldRadius)) continue;
+    const t = tiles.get(tileKey(step.q, step.r));
+    if (t) t.terrain = 'floor';
+  }
 }
 
 function initWallTiles(radius) {
@@ -153,8 +229,10 @@ function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
   const floors = collectFloorTiles(tiles).filter((tile) => {
     if (stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r) return false;
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
-    // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。上限は過密回避のための family 固有値。
-    return dist >= 9 && dist <= 22;
+    // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。
+    // 上限 22 は cave family の過密回避のための family 固有値(仕様の最小要件を満たしつつ
+    // 洞窟の広さに対してちょうどよい密度になるよう調整)。
+    return dist >= 5 && dist <= 22;
   });
   const shuffled = rng.shuffle(floors);
   const count = rng.int(3, 5);
@@ -166,7 +244,7 @@ function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
     const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
     if (tooClose) continue;
     enemies.push({
-      id: `g${enemies.length + 1}`,
+      id: `e${enemies.length + 1}`,
       kind: 'watcher',
       q: tile.q,
       r: tile.r,
@@ -229,8 +307,16 @@ function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
     let tile = tiles.get(key);
     if (tile) tile.terrain = 'floor';
     const spawnOffset = EDGE_DIRECTIONS[oppositeHeading(stairsConstraint.enterHeading)];
-    const spawnNeighbor = tiles.get(tileKey(stairsConstraint.q + spawnOffset.q, stairsConstraint.r + spawnOffset.r));
+    const spawnKey = tileKey(stairsConstraint.q + spawnOffset.q, stairsConstraint.r + spawnOffset.r);
+    const spawnNeighbor = tiles.get(spawnKey);
     if (spawnNeighbor) spawnNeighbor.terrain = 'floor';
+    // 連結性保証: 強制 floor 化した階段/spawn がメイン洞窟から孤立する可能性があるため、
+    // 必要なら最寄りメインタイルまで line で掘って接続する。
+    carveCorridorToMainComponent(
+      tiles,
+      new Hex(stairsConstraint.q, stairsConstraint.r),
+      new Hex(stairsConstraint.q + spawnOffset.q, stairsConstraint.r + spawnOffset.r),
+    );
     return {
       q: stairsConstraint.q,
       r: stairsConstraint.r,

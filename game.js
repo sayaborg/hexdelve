@@ -28,6 +28,7 @@ const state = {
   enemies: [],
   currentMapId: CONFIG.defaultGeneratedMapId,
   currentMapName: '',
+  currentSeed: null,
 };
 
 function getLogElement() {
@@ -410,10 +411,11 @@ function transitionFloor() {
   };
 
   // 新 seed(疑似乱数)で新マップ生成。同じプリセット(family, params)だが seed は変える。
-  const newSeed = Math.floor(Math.random() * 1_000_000_000) + state.turn;
-  const newRng = createRng(newSeed);
-  const newMap = generateMapFromPreset(state.currentMapId, stairsConstraint, newRng);
+  const newSeed = (Math.floor(Math.random() * 1_000_000_000) + state.turn) >>> 0;
+  const newMap = generateMapFromPreset(state.currentMapId, stairsConstraint, newSeed);
   setCurrentMapData(newMap);
+  state.currentSeed = newSeed;
+  state.currentMapName = buildGeneratedMapLabel(state.currentMapId, newSeed);
 
   // プレイヤー再配置(generator が返した playerStart に従う)
   state.playerPos = new Hex(newMap.playerStart.q, newMap.playerStart.r);
@@ -470,6 +472,11 @@ function buildEnemiesFromEntries(entries = []) {
       damage: kindDef.damage,
       mode: 'patrol',
       lastSeenPlayerPos: null,
+      // AI 状態追加フィールド(CHANGELOG フェーズ 34):
+      //   investigateTurnsLeft: 見失い地点到達後の探索残ターン(null=未起動 or 未到達)
+      //   stuckCount:           経路失敗・wait 連続カウンタ。10 で patrol フォールバック
+      investigateTurnsLeft: null,
+      stuckCount: 0,
     };
   });
 }
@@ -491,14 +498,20 @@ function generateMapByFamily(family, { radius, rng, params = {}, stairsConstrain
   return generateCaveMap({ radius, rng, params, stairsConstraint });
 }
 
-function generateMapFromPreset(mapId, stairsConstraint = null, rngOverride = null) {
+// generateMapFromPreset:
+//   mapId: マップ種別 ID
+//   stairsConstraint: フロア遷移時のみ非 null。対応階段の配置制約。
+//   seed: このマップを生成するための seed(v0 設計判断 D4: 初期は Date.now()、
+//         URL ?seed=N で上書き、フロア遷移は Math.random 由来)
+function generateMapFromPreset(mapId, stairsConstraint = null, seed) {
   const preset = getGeneratedPreset(mapId);
   if (!preset) {
     throw new Error(`Unknown generated map preset: ${mapId}`);
   }
-  const rng = rngOverride ?? createRng(preset.seed ?? 12345);
+  const resolvedSeed = seed >>> 0;
+  const rng = createRng(resolvedSeed);
   const params = preset.family === 'rooms_classic'
-    ? { seed: preset.seed ?? 12345, ...(preset.params ?? {}) }
+    ? { seed: resolvedSeed, ...(preset.params ?? {}) }
     : (preset.params ?? {});
   return generateMapByFamily(preset.family, {
     radius: state.config.worldRadius,
@@ -508,10 +521,11 @@ function generateMapFromPreset(mapId, stairsConstraint = null, rngOverride = nul
   });
 }
 
-function buildGeneratedMapLabel(mapId) {
+function buildGeneratedMapLabel(mapId, seed) {
   const preset = getGeneratedPreset(mapId);
   if (!preset) return 'Generated map';
-  return `${preset.label} (seed:${preset.seed ?? 12345})`;
+  const shownSeed = seed ?? state.currentSeed ?? preset.seed ?? 12345;
+  return `${preset.label} (seed:${shownSeed})`;
 }
 
 function updateMapUi() {
@@ -526,7 +540,7 @@ function updateMapUi() {
     } else if (state.currentMapId === 'generated_cave_natural') {
       mapMeta.textContent = '自然洞窟寄りCave。Cellular Automata で塊を作り、最大連結成分のみ採用。';
     } else if (state.currentMapId === 'generated_rooms_classic') {
-      mapMeta.textContent = 'semantic-v2 rooms family。room / corridor / threshold / door を持つ canonical classic rooms。';
+      mapMeta.textContent = 'rooms_classic: room / corridor / threshold / door(closed/open/locked) / stairs を持つ古典型マップ。';
     } else {
       mapMeta.textContent = '';
     }
@@ -549,14 +563,19 @@ function setupMapUi() {
   updateMapUi();
 }
 
-function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { keepLog = false } = {}) {
-  const generated = generateMapFromPreset(mapId);
+function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { keepLog = false, seedOverride = null } = {}) {
+  // v0 設計判断 D4(CHANGELOG フェーズ 34):
+  //   初期 seed は Date.now() ベース。seedOverride を明示的に渡せば優先される。
+  //   URL クエリ ?seed=N は bootstrap で解釈して seedOverride として流す。
+  const seed = (seedOverride ?? Date.now()) >>> 0;
+  const generated = generateMapFromPreset(mapId, null, seed);
   const preset = getGeneratedPreset(mapId);
 
   setCurrentMapData(generated);
 
   state.currentMapId = mapId;
-  state.currentMapName = buildGeneratedMapLabel(mapId);
+  state.currentSeed = seed;
+  state.currentMapName = buildGeneratedMapLabel(mapId, seed);
   state.playerPos = new Hex(generated.playerStart.q, generated.playerStart.r);
   state.previewFacing = generated.playerStart.facing ?? 0;
   state.committedFacing = generated.playerStart.facing ?? 0;
@@ -579,8 +598,20 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
 
   const standableCount = generated.meta.floorCount ?? generated.floor?.size ?? generated.cells?.filter((cell) => cell.support === 'stable').length ?? 0;
   pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / standable ${standableCount} / radius ${generated.meta.radius}。`);
-  pushLog('GEN', `${JSON.stringify(preset?.params ?? generated.meta.params)}`);
-  pushLog('KEY', '← / → で回頭、Q/W/E/A/S/D = 左前 / 前 / 右前 / 左後 / 後 / 右後。');
+  pushLog('SEED', `seed = ${seed}(URL に ?seed=${seed} を付けて開くと同じマップを再現できる)`);
+}
+
+// URL クエリから seed を取得する。?seed=12345 形式、数値として解釈できなければ null。
+function readUrlSeedParam() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get('seed');
+    if (raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? (n >>> 0) : null;
+  } catch {
+    return null;
+  }
 }
 
 function bootstrap() {
@@ -597,12 +628,11 @@ function bootstrap() {
   });
   bindKeyboard({ rotatePreview, tryMove });
   setupMapUi();
-  resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true });
-  pushLog('INIT', 'Split Prototype を初期化。生成マップ(rooms_classic / cave_walk / cave_natural)のみ利用可能。');
-  pushLog('LOS', '中心→中心を基準にし、境界曖昧ケースは 3 本線のうち 1 本でも通れば可視。');
-  pushLog('FOV', 'プレイヤーも敵も前方120度FOV + LOS + 近接知覚で認識する。');
-  pushLog('RULE', '回頭はゼロターンで情報を増やさず、移動や待機で初めて視界更新が走る。');
-  pushLog('DEBUG', '試用のため敵ステータスは右パネルへ全公開。');
+
+  const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
+  resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
+
+  pushLog('INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、待機ボタンで 1 ターン経過。`);
 }
 
 bootstrap();
