@@ -39,20 +39,85 @@ function getLogElement() {
   return document.getElementById('log');
 }
 
-function clearLog() {
+// v1-0a(NEXT_STEPS §2.1、論点 A 合意 2026-04-24): 構造化 log entry 設計。
+//   entry = { turn, category, tag, source: { kind, channel, fidelity }, text, structured? }
+//   channel = 'vision' | 'internal'(v2+ で 'audition', 'presence' 等追加)
+//   fidelity = 'certain' のみ v1-0a で使用(省略時デフォルト、v2+ で 'partial' 等追加)
+//   通常表示 = vision のみ、debug overlay ON で internal も表示。
+//
+// 実装: logEntries 配列(newest-first、上限 300)を module-level で保持。
+// push 時は可視性を判定して DOM に prepend(軽量)、
+// debug overlay トグル時は全再構築。
+const LOG_ENTRY_LIMIT = 300;
+const logEntries = [];
+
+function isEntryVisible(entry) {
+  return entry.source.channel !== 'internal' || state.debugOverlay;
+}
+
+function appendEntryDom(entry, { prepend = true } = {}) {
   const log = getLogElement();
-  if (log) {
-    log.innerHTML = '';
+  if (!log) return;
+  if (!isEntryVisible(entry)) return;
+  const line = document.createElement('div');
+  line.className = `log-entry log-${entry.source.channel}`;
+  line.innerHTML = `<span class="tag">${entry.tag}</span>${entry.text}`;
+  if (prepend) log.prepend(line);
+  else log.appendChild(line);
+}
+
+function rebuildLogDom() {
+  const log = getLogElement();
+  if (!log) return;
+  log.innerHTML = '';
+  // logEntries は newest-first。DOM 上も上から newest に並べる → 配列順に appendChild。
+  for (const entry of logEntries) {
+    appendEntryDom(entry, { prepend: false });
   }
 }
 
-function pushLog(tag, message) {
+function clearLog() {
+  logEntries.length = 0;
   const log = getLogElement();
-  if (!log) return;
-  const line = document.createElement('div');
-  line.className = 'log-entry';
-  line.innerHTML = `<span class="tag">${tag}</span>${message}`;
-  log.prepend(line);
+  if (log) log.innerHTML = '';
+}
+
+function pushLogEntry(entry) {
+  const normalized = {
+    turn: entry.turn ?? state.turn,
+    category: entry.category,
+    tag: entry.tag,
+    source: {
+      kind: entry.source?.kind ?? 'system',
+      channel: entry.source?.channel ?? 'vision',
+      fidelity: entry.source?.fidelity ?? 'certain',
+    },
+    text: entry.text,
+    structured: entry.structured ?? null,
+  };
+  logEntries.unshift(normalized);
+  if (logEntries.length > LOG_ENTRY_LIMIT) logEntries.length = LOG_ENTRY_LIMIT;
+  appendEntryDom(normalized, { prepend: true });
+}
+
+// 書きやすさのための薄いラッパ。kind のデフォルトは呼び出し文脈で決定。
+function logVision(category, tag, text, { structured = null, kind = 'player_action' } = {}) {
+  pushLogEntry({ category, tag, source: { kind, channel: 'vision' }, text, structured });
+}
+
+function logInternal(category, tag, text, { structured = null, kind = 'system' } = {}) {
+  pushLogEntry({ category, tag, source: { kind, channel: 'internal' }, text, structured });
+}
+
+// enemy-ai.js に渡す hook。AI 状態遷移は常に internal / ai_state / certain 固定。
+function logAiTransition(text, structured = null) {
+  pushLogEntry({
+    category: 'ai',
+    tag: 'AI',
+    source: { kind: 'ai_state', channel: 'internal' },
+    text,
+    structured,
+  });
 }
 
 function refreshVisibility() {
@@ -73,7 +138,7 @@ function rotatePreview(delta) {
     return;
   }
   state.previewFacing = (state.previewFacing + delta + 6) % 6;
-  pushLog('TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`);
+  logInternal('rotation', 'TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`, { kind: 'player_action' });
   render(state);
 }
 
@@ -96,9 +161,9 @@ function removeDeadEnemies() {
 function playerAttack(enemy, localMove) {
   // ダメージは CONFIG.player.damage 参照(v0 は固定 1、SPEC §9.8)。
   enemy.hp -= CONFIG.player.damage;
-  pushLog('ATK', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} の敵 ${enemy.name} を攻撃。${CONFIG.player.damage} ダメージ。残HP ${Math.max(enemy.hp, 0)}。`);
+  logVision('combat', 'ATK', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} の敵 ${enemy.name} を攻撃。${CONFIG.player.damage} ダメージ。残HP ${Math.max(enemy.hp, 0)}。`);
   if (enemy.hp <= 0) {
-    pushLog('KILL', `${enemy.name} を倒した。`);
+    logVision('combat', 'KILL', `${enemy.name} を倒した。`);
     // 除去は resolveAttackPhase 終了後に一括(相打ち原則のため、
     // ここで除去すると同ターンの後続敵攻撃で find が null を返してしまう)。
   }
@@ -109,7 +174,7 @@ function enemyAttackPlayer(enemy) {
   const damage = CONFIG.enemyKinds[enemy.kind]?.damage ?? 1;
   enemy.facing = bestFacingToward(enemy.pos, state.playerPos);
   state.playerHP -= damage;
-  pushLog('DMG', `敵 ${enemy.name} が攻撃。プレイヤーは ${damage} ダメージ。残HP ${Math.max(state.playerHP, 0)}。`);
+  logVision('combat', 'DMG', `敵 ${enemy.name} が攻撃。プレイヤーは ${damage} ダメージ。残HP ${Math.max(state.playerHP, 0)}。`, { kind: 'enemy_action' });
   // gameOver 判定は resolveAttackPhase の最後に一括(相打ち原則のため、
   // ここで gameOver を立てると後続の敵攻撃がスキップされてしまう)。
 }
@@ -220,7 +285,7 @@ function resolveMovePhase(playerPlan, enemyPlans) {
     const hasPlayer = group.some((entry) => entry.actorType === 'player');
     if (hasPlayer) {
       const labels = group.map((entry) => `${entry.actorType === 'player' ? 'P' : entry.actorId}(wt:${entry.wt})`).join(' / ');
-      pushLog('CLASH', `同一空きマス q:${group[0].target.q} r:${group[0].target.r} への進入競合。${labels} は同wtのため全員足踏み。`);
+      logVision('movement', 'CLASH', `同一空きマス q:${group[0].target.q} r:${group[0].target.r} への進入競合。${labels} は同wtのため全員足踏み。`);
     }
   }
 
@@ -228,9 +293,9 @@ function resolveMovePhase(playerPlan, enemyPlans) {
     const winner = winners.get('player');
     if (winner) {
       state.playerPos = winner.target;
-      pushLog('MOVE', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[playerPlan.localMove]} へ移動し、q:${state.playerPos.q} r:${state.playerPos.r} に到達。`);
+      logVision('movement', 'MOVE', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[playerPlan.localMove]} へ移動し、q:${state.playerPos.q} r:${state.playerPos.r} に到達。`);
     } else if (contestedLosers.has('player')) {
-      pushLog('CLASH', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[playerPlan.localMove]} への進入は空きマス競合で敗北。player(wt:${state.playerWt}) は足踏み。`);
+      logVision('movement', 'CLASH', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[playerPlan.localMove]} への進入は空きマス競合で敗北。player(wt:${state.playerWt}) は足踏み。`);
     }
   }
 
@@ -271,7 +336,7 @@ function resolveAttackPhase(playerPlan, enemyPlans) {
   // プレイヤー死亡判定
   if (state.playerHP <= 0 && !state.gameOver) {
     state.gameOver = true;
-    pushLog('OVER', 'プレイヤーは倒れた。GAME OVER。');
+    logVision('system', 'OVER', 'プレイヤーは倒れた。GAME OVER。', { kind: 'system' });
   }
 }
 
@@ -283,7 +348,7 @@ function finishTurn(playerPlan, enemyPlans) {
   }
 
   refreshVisibility();
-  updateEnemyAwareness(state, { pushLog });
+  updateEnemyAwareness(state, { aiTransition: logAiTransition });
   render(state);
 }
 
@@ -313,7 +378,7 @@ function tryMove(localMove) {
       // フロア遷移後は敵が全て破棄されるため、遷移前に攻撃処理を済ませる必要がある。
       commitFacing();
       state.turn += 1;
-      pushLog('STAIRS', `Turn ${state.turn}: ${stairsParams.verticalMode === 'up' ? '上り' : '下り'}階段を使用。`);
+      logVision('interact', 'STAIRS', `Turn ${state.turn}: ${stairsParams.verticalMode === 'up' ? '上り' : '下り'}階段を使用。`);
       resolveAttackPhase({ type: 'wait' }, enemyPlans);
       if (state.gameOver) {
         render(state);
@@ -326,7 +391,7 @@ function tryMove(localMove) {
       // 階段は通過型。enterHeading (= exitHeading) と opposite(enterHeading) の 2 方向以外は壁扱い。
       commitFacing();
       state.turn += 1;
-      pushLog('WALL', `Turn ${state.turn}: 階段上から ${LOCAL_MOVE_LABELS[localMove]} 方向へは動けない。`);
+      logVision('movement', 'WALL', `Turn ${state.turn}: 階段上から ${LOCAL_MOVE_LABELS[localMove]} 方向へは動けない。`);
       finishTurn(playerPlan, enemyPlans);
       return;
     }
@@ -337,7 +402,7 @@ function tryMove(localMove) {
   if (outside) {
     commitFacing();
     state.turn += 1;
-    pushLog('EDGE', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、世界外のため進めない。`);
+    logVision('movement', 'EDGE', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、世界外のため進めない。`);
     finishTurn(playerPlan, enemyPlans);
     return;
   }
@@ -361,14 +426,14 @@ function tryMove(localMove) {
       commitFacing();
       state.turn += 1;
       setDoorState(target, 'open');
-      pushLog('DOOR', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} のドアを開けた。`);
+      logVision('interact', 'DOOR', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} のドアを開けた。`);
       finishTurn(playerPlan, enemyPlans);
       return;
     }
     if (targetFeature.state === 'locked') {
       commitFacing();
       // ターン消費なし。仮向きを確定向きに反映するだけ。
-      pushLog('DOOR', `${LOCAL_MOVE_LABELS[localMove]} のドアには鍵がかかっている。`);
+      logVision('interact', 'DOOR', `${LOCAL_MOVE_LABELS[localMove]} のドアには鍵がかかっている。`);
       render(state);
       return;
     }
@@ -377,7 +442,7 @@ function tryMove(localMove) {
   if (!canStandAt(target, heading)) {
     commitFacing();
     state.turn += 1;
-    pushLog('WALL', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、q:${target.q} r:${target.r} は壁。`);
+    logVision('movement', 'WALL', `Turn ${state.turn}: ${LOCAL_MOVE_LABELS[localMove]} へ移動を試みたが、q:${target.q} r:${target.r} は壁。`);
     finishTurn(playerPlan, enemyPlans);
     return;
   }
@@ -437,9 +502,9 @@ function transitionFloor() {
   state.explored.add(`${stairsConstraint.q},${stairsConstraint.r}`);
 
   refreshVisibility();
-  updateEnemyAwareness(state, { pushLog });
+  updateEnemyAwareness(state, { aiTransition: logAiTransition });
   render(state);
-  pushLog('FLOOR', `新フロア生成。階段(${stairsConstraint.q},${stairsConstraint.r})の verticalMode=${newVerticalMode}、enterHeading=${newEnterHeading}。`);
+  logInternal('system', 'FLOOR', `新フロア生成。階段(${stairsConstraint.q},${stairsConstraint.r})の verticalMode=${newVerticalMode}、enterHeading=${newEnterHeading}。`);
 }
 
 function waitAction() {
@@ -449,16 +514,17 @@ function waitAction() {
   const enemyPlans = planEnemyActions(state);
   commitFacing();
   state.turn += 1;
-  pushLog('WAIT', `Turn ${state.turn}: 待機。確定向きは ${HEADING_LABELS[state.committedFacing]}。`);
+  logVision('movement', 'WAIT', `Turn ${state.turn}: 待機。確定向きは ${HEADING_LABELS[state.committedFacing]}。`);
   finishTurn({ type: 'wait' }, enemyPlans);
 }
 
 // v1-0a(NEXT_STEPS §2.1): debug overlay のトグル。
 //   ゲームオーバー時もトグル可能(デバッグ用途)。
-//   S1 時点ではログ表示のみ。実際の UI 出し分けは S3/S4/S5 で実装される。
+//   internal channel の log 表示切替のため、log の DOM を全再構築する。
 function toggleDebugOverlay() {
   state.debugOverlay = !state.debugOverlay;
-  pushLog('DEBUG', `debug overlay ${state.debugOverlay ? 'ON' : 'OFF'}。`);
+  logInternal('system', 'DEBUG', `debug overlay ${state.debugOverlay ? 'ON' : 'OFF'}。`);
+  rebuildLogDom();
   render(state);
 }
 
@@ -605,13 +671,13 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   }
 
   refreshVisibility();
-  updateEnemyAwareness(state, { pushLog });
+  updateEnemyAwareness(state, { aiTransition: logAiTransition });
   updateMapUi();
   render(state);
 
   const standableCount = generated.meta.floorCount ?? generated.floor?.size ?? generated.cells?.filter((cell) => cell.support === 'stable').length ?? 0;
-  pushLog('MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / standable ${standableCount} / radius ${generated.meta.radius}。`);
-  pushLog('SEED', `seed = ${seed}(URL に ?seed=${seed} を付けて開くと同じマップを再現できる)`);
+  logInternal('system', 'MAP', `${state.currentMapName} を生成。family ${generated.meta.family} / standable ${standableCount} / radius ${generated.meta.radius}。`);
+  logInternal('system', 'SEED', `seed = ${seed}(URL に ?seed=${seed} を付けて開くと同じマップを再現できる)`);
 }
 
 // URL クエリから seed を取得する。?seed=12345 形式、数値として解釈できなければ null。
@@ -645,7 +711,7 @@ function bootstrap() {
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  pushLog('INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、Z または待機ボタンで 1 ターン経過、F3 で debug overlay トグル。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、Z または待機ボタンで 1 ターン経過、F3 で debug overlay トグル。`);
 }
 
 bootstrap();

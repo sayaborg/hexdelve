@@ -91,6 +91,16 @@ canvas {
   font-weight: 700;
   margin-right: 6px;
 }
+
+/* v1-0a(NEXT_STEPS §2.1): log channel 別スタイル。
+   vision は既存ハイライト色を維持、internal は debug 時のみ表示される内部情報なので
+   tag と本文を muted 寄りに落として視覚的に区別する。 */
+.log-entry.log-internal .tag {
+  color: var(--muted);
+}
+.log-entry.log-internal {
+  color: var(--muted);
+}
 .control-stack {
   display: grid;
   gap: 12px;

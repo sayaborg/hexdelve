@@ -164,7 +164,7 @@ export function updateEnemyAwareness(state, hooks) {
       enemy.stuckCount = 0;
       if (previousMode !== 'chase') {
         const source = notice.visible ? '視認' : '近接知覚';
-        hooks.pushLog('AI', `敵 ${enemy.name} が${source}でプレイヤーを発見。${modeLabel(previousMode)} → 追跡。`);
+        hooks.aiTransition(`敵 ${enemy.name} が${source}でプレイヤーを発見。${modeLabel(previousMode)} → 追跡。`);
       }
       continue;
     }
@@ -178,14 +178,14 @@ export function updateEnemyAwareness(state, hooks) {
       enemy.investigateTurnsLeft = null;
       enemy.stuckCount = 0;
       enemy.facing = enemy.homeFacing ?? enemy.facing;
-      hooks.pushLog('AI', `敵 ${enemy.name} は ${STUCK_FALLBACK_LIMIT} ターン動けず、${modeLabel(previousMode)} → 巡回へフォールバック。`);
+      hooks.aiTransition(`敵 ${enemy.name} は ${STUCK_FALLBACK_LIMIT} ターン動けず、${modeLabel(previousMode)} → 巡回へフォールバック。`);
       continue;
     }
 
     if (previousMode === 'chase') {
       enemy.mode = 'investigate';
       enemy.investigateTurnsLeft = null;
-      hooks.pushLog('AI', `敵 ${enemy.name} はプレイヤーを見失った。追跡 → 見失い地点確認。`);
+      hooks.aiTransition(`敵 ${enemy.name} はプレイヤーを見失った。追跡 → 見失い地点確認。`);
       continue;
     }
 
@@ -193,7 +193,7 @@ export function updateEnemyAwareness(state, hooks) {
       // investigateTurnsLeft が null のまま到達 → 探索カウンタを起動(設計判断 D1)
       if (enemy.investigateTurnsLeft == null && enemy.lastSeenPlayerPos && enemy.pos.equals(enemy.lastSeenPlayerPos)) {
         enemy.investigateTurnsLeft = randomInt(INVESTIGATE_MIN_TURNS, INVESTIGATE_MAX_TURNS);
-        hooks.pushLog('AI', `敵 ${enemy.name} は見失い地点に到達。周辺を ${enemy.investigateTurnsLeft} ターン探索。`);
+        hooks.aiTransition(`敵 ${enemy.name} は見失い地点に到達。周辺を ${enemy.investigateTurnsLeft} ターン探索。`);
         continue;
       }
       // カウンタ走行中: 毎ターン 1 減、0 以下で return 遷移
@@ -202,7 +202,7 @@ export function updateEnemyAwareness(state, hooks) {
         if (enemy.investigateTurnsLeft <= 0) {
           enemy.mode = 'return';
           enemy.investigateTurnsLeft = null;
-          hooks.pushLog('AI', `敵 ${enemy.name} は探索を終えた。見失い地点確認 → 帰投。`);
+          hooks.aiTransition(`敵 ${enemy.name} は探索を終えた。見失い地点確認 → 帰投。`);
         }
         continue;
       }
@@ -217,7 +217,7 @@ export function updateEnemyAwareness(state, hooks) {
       enemy.mode = 'patrol';
       enemy.lastSeenPlayerPos = null;
       enemy.facing = enemy.homeFacing ?? enemy.facing;
-      hooks.pushLog('AI', `敵 ${enemy.name} は持ち場へ戻った。帰投 → 巡回。`);
+      hooks.aiTransition(`敵 ${enemy.name} は持ち場へ戻った。帰投 → 巡回。`);
     }
   }
 }
