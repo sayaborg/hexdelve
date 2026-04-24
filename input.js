@@ -1,31 +1,25 @@
+// v1-0a(NEXT_STEPS §2.1): 入力系の束ね。
+//   - bindControls: 固定ボタン(回頭、待機、移動)とマップ UI
+//   - bindMainCanvasGestures: 主画面のタップ/スワイプ(7 ゾーン判定 + 角度差回頭)
+//   - bindKeyboard: キーボード(矢印回頭、QWEASD 移動、Z 待機、F3 debug)
+
 export function bindControls(handlers) {
   document.getElementById('rotateLeftBtn').addEventListener('click', () => handlers.rotatePreview(-1));
   document.getElementById('rotateRightBtn').addEventListener('click', () => handlers.rotatePreview(1));
 
-  // v1-0a(NEXT_STEPS §2.1): 待機ボタンはオーバーレイと下段の 2 箇所に存在しうる。
-  // data-wait-btn 属性で全インスタンスを捕捉。
+  // 待機ボタン(下段 hex-pad など、複数あり得るため data-wait-btn で捕捉)
   document.querySelectorAll('[data-wait-btn]').forEach((button) => {
     button.addEventListener('click', handlers.waitAction);
   });
 
+  // 移動ボタン(下段 hex-pad、data-local-move=0..5)
   document.querySelectorAll('[data-local-move]').forEach((button) => {
     button.addEventListener('click', () => {
       handlers.tryMove(Number(button.dataset.localMove));
     });
   });
 
-  // v1-0a(NEXT_STEPS §2.1): オーバーレイボタンのタップフィードバック。
-  // iOS Safari では button :active が安定して発火しないため、touchstart/touchend で
-  // 手動で .pressed クラスを付け外しする(CSS 側と連動)。
-  // pointerevents 系だとデスクトップとタッチで挙動が混ざるので、touch event のみに限定。
-  document.querySelectorAll('.hex-pad-overlay .hex-overlay-btn').forEach((button) => {
-    const press = () => button.classList.add('pressed');
-    const release = () => button.classList.remove('pressed');
-    button.addEventListener('touchstart', press, { passive: true });
-    button.addEventListener('touchend', release);
-    button.addEventListener('touchcancel', release);
-  });
-
+  // マップ選択 UI
   const mapSelect = document.getElementById('mapSelect');
   const resetMapBtn = document.getElementById('resetMapBtn');
 
@@ -34,7 +28,6 @@ export function bindControls(handlers) {
       handlers.onSelectMap?.(event.target.value);
     });
   }
-
   if (resetMapBtn) {
     resetMapBtn.addEventListener('click', () => {
       handlers.onResetMap?.();
@@ -42,36 +35,164 @@ export function bindControls(handlers) {
   }
 }
 
+// ==============================================================================
+// v1-0a(S8+S9 統合、NEXT_STEPS §2.1): 主画面 canvas のジェスチャ処理
+// ==============================================================================
+//
+// タップ:主画面を HEX 6 方向 + 中心の 7 分割、タップ位置で移動/待機を決定。
+//   主画面はヘディングアップ表示 → 画面上が「前」= localMove 0、右上が「右前」= 1 …。
+//   HEADING_ANGLES_DEG と画面座標の規則が自然に一致する。
+//
+// スワイプ:画面中心を軸にしたポインタ角度差を facing ステップに換算。
+//   ドラッグ中はリアルタイムに preview facing を更新(silent = log 出さない)、
+//   pointerup で最終値を log に 1 回出して確定。
+//
+// 判別:pointerdown からの移動量が TAP_THRESHOLD_PX 未満ならタップ、それ以上ならスワイプ。
+// ==============================================================================
+
+const TAP_THRESHOLD_PX = 12;        // この距離未満ならタップ扱い
+const CENTER_ZONE_RATIO = 0.14;     // 主画面短辺に対する待機ゾーン半径の比
+const CENTER_DEADZONE_PX = 14;      // 画面中心近傍は角度不安定のため無視
+const ZONE_ANGLES_DEG = [-90, -30, 30, 90, 150, -150];
+
+function localMoveFromScreenAngle(angleDeg) {
+  // localMove n の画面上角度 = HEADING_ANGLES_DEG[n]。
+  // 画面上(-90°)= 前、右上(-30°)= 右前、右下(30°)= 右後、
+  // 画面下(90°)= 後、左下(150°)= 左後、左上(-150°)= 左前。
+  let bestLocalMove = 0;
+  let bestDiff = Infinity;
+  for (let lm = 0; lm < 6; lm += 1) {
+    let diff = Math.abs(angleDeg - ZONE_ANGLES_DEG[lm]);
+    if (diff > 180) diff = 360 - diff;
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestLocalMove = lm;
+    }
+  }
+  return bestLocalMove;
+}
+
+function angleFromCenter(clientX, clientY, cx, cy) {
+  const dx = clientX - cx;
+  const dy = clientY - cy;
+  if (Math.hypot(dx, dy) < CENTER_DEADZONE_PX) return null;
+  return (Math.atan2(dy, dx) * 180) / Math.PI;
+}
+
+export function bindMainCanvasGestures(handlers) {
+  const canvas = document.getElementById('mainCanvas');
+  if (!canvas) return;
+
+  let isPressed = false;
+  let startClientX = 0;
+  let startClientY = 0;
+  let startFacing = 0;
+  let startAngleDeg = null;
+  let movedBeyondTapThreshold = false;
+
+  const getCenter = () => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      rect,
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+    };
+  };
+
+  canvas.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    canvas.setPointerCapture?.(event.pointerId);
+    isPressed = true;
+    startClientX = event.clientX;
+    startClientY = event.clientY;
+    startFacing = handlers.getCurrentPreviewFacing?.() ?? 0;
+    const center = getCenter();
+    startAngleDeg = angleFromCenter(event.clientX, event.clientY, center.cx, center.cy);
+    movedBeyondTapThreshold = false;
+    event.preventDefault();
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+    if (!isPressed) return;
+    const dx = event.clientX - startClientX;
+    const dy = event.clientY - startClientY;
+    if (!movedBeyondTapThreshold && Math.hypot(dx, dy) >= TAP_THRESHOLD_PX) {
+      movedBeyondTapThreshold = true;
+    }
+    if (!movedBeyondTapThreshold) return;
+
+    // スワイプ:画面中心を軸にしたポインタの角度差で facing を決定
+    const center = getCenter();
+    const currentAngle = angleFromCenter(event.clientX, event.clientY, center.cx, center.cy);
+    if (startAngleDeg === null || currentAngle === null) return;
+    let delta = currentAngle - startAngleDeg;
+    while (delta > 180) delta -= 360;
+    while (delta < -180) delta += 360;
+    const steps = Math.round(delta / 60);
+    const newFacing = (startFacing + steps + 6000) % 6;
+    handlers.setPreviewFacing?.(newFacing, { silent: true });
+  });
+
+  const finishPointer = (event, { cancelled = false } = {}) => {
+    if (!isPressed) return;
+    isPressed = false;
+    canvas.releasePointerCapture?.(event.pointerId);
+    if (cancelled) return;
+
+    if (movedBeyondTapThreshold) {
+      // スワイプ終了:facing は pointermove で既に反映済み。log を 1 回だけ出して確定。
+      handlers.commitSwipeFacing?.();
+      return;
+    }
+
+    // タップ:画面中心からのベクトルで 7 ゾーン判定
+    const center = getCenter();
+    const dx = event.clientX - center.cx;
+    const dy = event.clientY - center.cy;
+    const dist = Math.hypot(dx, dy);
+    const centerZoneRadius = Math.min(center.rect.width, center.rect.height) * CENTER_ZONE_RATIO;
+
+    if (dist < centerZoneRadius) {
+      handlers.waitAction?.();
+      return;
+    }
+    const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    const localMove = localMoveFromScreenAngle(angleDeg);
+    handlers.tryMove?.(localMove);
+  };
+
+  canvas.addEventListener('pointerup', (event) => finishPointer(event));
+  canvas.addEventListener('pointercancel', (event) => finishPointer(event, { cancelled: true }));
+
+  // スクロール/ズーム等のブラウザデフォルトジェスチャとの干渉を防ぐ
+  canvas.style.touchAction = 'none';
+}
+
 export function bindKeyboard(handlers) {
   window.addEventListener('keydown', (event) => {
     const key = event.key.toLowerCase();
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
-      handlers.rotatePreview(-1);  // 左矢印 = 反時計回り(新規則では heading - 1)
+      handlers.rotatePreview(-1);
       return;
     }
     if (event.key === 'ArrowRight') {
       event.preventDefault();
-      handlers.rotatePreview(1);   // 右矢印 = 時計回り(新規則では heading + 1)
+      handlers.rotatePreview(1);
       return;
     }
-
-    // F3: debug overlay トグル(v1-0a、NEXT_STEPS §2.1)。
-    // ゲームオーバー時もトグル可能(デバッグ用途のため)。
+    // F3: debug overlay トグル(ゲームオーバー時も有効)
     if (event.key === 'F3') {
       event.preventDefault();
       handlers.toggleDebugOverlay?.();
       return;
     }
-
-    // Z: 待機ショートカット(v1-0a)。
-    // QWEASD の移動キーと同じ左手エリアに配置。待機ボタンクリックと完全に同じ挙動。
+    // Z: 待機ショートカット(QWEASD 移動キーと同じ左手エリア)
     if (key === 'z') {
       event.preventDefault();
       handlers.waitAction?.();
       return;
     }
-
     const keyToLocalMove = { q: 5, w: 0, e: 1, a: 4, s: 3, d: 2 };
     if (key in keyToLocalMove) {
       event.preventDefault();

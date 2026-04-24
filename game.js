@@ -8,7 +8,7 @@ import { generateClassicRoomsMap } from './map-family-rooms-classic.js';
 import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
 import { render } from './render.js';
-import { bindControls, bindKeyboard } from './input.js';
+import { bindControls, bindKeyboard, bindMainCanvasGestures } from './input.js';
 
 const state = {
   config: CONFIG,
@@ -140,6 +140,29 @@ function rotatePreview(delta) {
   state.previewFacing = (state.previewFacing + delta + 6) % 6;
   logInternal('rotation', 'TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`, { kind: 'player_action' });
   render(state);
+}
+
+// v1-0a(S8+S9): スワイプ回頭用の絶対値セッタ。ドラッグ中の多数回更新で log を汚さないよう
+// { silent: true } オプションで log 抑制可能。final 確定は commitSwipeFacing で 1 回だけ log。
+function setPreviewFacing(newFacing, { silent = false } = {}) {
+  if (state.gameOver) return;
+  const normalized = ((newFacing % 6) + 6) % 6;
+  if (state.previewFacing === normalized) return;
+  state.previewFacing = normalized;
+  if (!silent) {
+    logInternal('rotation', 'TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更。まだターンは進まず、視界も更新されない。`, { kind: 'player_action' });
+  }
+  render(state);
+}
+
+function getCurrentPreviewFacing() {
+  return state.previewFacing;
+}
+
+// v1-0a(S8+S9): スワイプ終了時の確定 log。pointermove 中の silent 更新を 1 回に集約。
+function commitSwipeFacing() {
+  if (state.gameOver) return;
+  logInternal('rotation', 'TURN', `仮向きを ${HEADING_LABELS[state.previewFacing]} に変更(スワイプ)。まだターンは進まず、視界も更新されない。`, { kind: 'player_action' });
 }
 
 function localMoveToWorldHeading(localMove) {
@@ -706,12 +729,19 @@ function bootstrap() {
     },
   });
   bindKeyboard({ rotatePreview, tryMove, waitAction, toggleDebugOverlay });
+  bindMainCanvasGestures({
+    tryMove,
+    waitAction,
+    getCurrentPreviewFacing,
+    setPreviewFacing,
+    commitSwipeFacing,
+  });
   setupMapUi();
 
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、Z または待機ボタンで 1 ターン経過、F3 で debug overlay トグル。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v0 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
 }
 
 bootstrap();

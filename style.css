@@ -53,67 +53,13 @@ canvas {
 .canvas-frame {
   position: relative;
 }
-
-/* タッチ向け 6 方向 + 中心待機オーバーレイ(モバイル幅のみ表示)。
-   主画面 canvas 全体を覆い、中央(プレイヤー位置)から HEX 6 方向に大きなボタンを配置。
-   主画面内の大部分がタップ領域となる設計。
-   コンテナ自体は pointer-events を透過、ボタンのみ捕捉(スワイプ回頭=S9 の邪魔をしないため)。 */
-.hex-pad-overlay {
-  position: absolute;
-  inset: 0;
-  display: none;
-  pointer-events: none;
-  z-index: 2;
-}
-.hex-pad-overlay .hex-overlay-btn {
-  pointer-events: auto;
-  position: absolute;
-  width: 80px;
-  height: 80px;
-  min-width: 0;
-  padding: 0;
-  border-radius: 50%;
-  background: rgba(32, 42, 53, 0.28);
-  color: rgba(255, 255, 255, 0.88);
-  font-size: 22px;
-  font-weight: 700;
-  border: 1.5px solid rgba(255, 255, 255, 0.20);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+/* v1-0a: 主画面 canvas を直接タップしてゾーン判定する。
+   タップ中のテキスト選択 / ハイライトを抑制。 */
+#mainCanvas {
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   cursor: pointer;
-  transform: translate(-50%, -50%);
-  transition: background 0.1s ease;
-}
-/* :active は iOS Safari で不安定なため、input.js で touchstart/touchend から
-   .pressed クラスを付け外しする(下 @media 内で発光)。 */
-.hex-pad-overlay .hex-overlay-btn.pressed,
-.hex-pad-overlay .hex-overlay-btn:active {
-  background: rgba(124, 199, 255, 0.55);
-  border-color: rgba(124, 199, 255, 0.9);
-}
-/* 中央(プレイヤー位置)から HEX 6 方向に均等配置。各ボタン中央を
-   translate(-50%, -50%) で指定座標に合わせる。
-   角度は N/NE/SE/S/SW/NW、半径は画面短辺の約 25%。
-   dir-X クラスの意味論(= CSS レイアウト上の「どの方向のボタンか」)は下段 .hex-pad と同じ。 */
-.hex-pad-overlay .dir-2 { top: 22%;   left: 50%; }  /* ↑ 前 */
-.hex-pad-overlay .dir-1 { top: 36%;   left: 72%; }  /* ↗ 右前 */
-.hex-pad-overlay .dir-0 { top: 64%;   left: 72%; }  /* ↘ 右後 */
-.hex-pad-overlay .dir-5 { top: 78%;   left: 50%; }  /* ↓ 後 */
-.hex-pad-overlay .dir-4 { top: 64%;   left: 28%; }  /* ↙ 左後 */
-.hex-pad-overlay .dir-3 { top: 36%;   left: 28%; }  /* ↖ 左前 */
-.hex-pad-overlay .wait-overlay {
-  top: 50%; left: 50%;
-  width: 72px; height: 72px;
-  font-size: 18px;
-  background: rgba(124, 199, 255, 0.18);
-  border-color: rgba(124, 199, 255, 0.38);
-}
-.hex-pad-overlay .wait-overlay.pressed,
-.hex-pad-overlay .wait-overlay:active {
-  background: rgba(124, 199, 255, 0.55);
 }
 .legend {
   display: flex;
@@ -250,12 +196,6 @@ button:hover { background: #253242; }
 }
 @media (max-width: 860px) {
   .views, .footer-grid { grid-template-columns: 1fr; }
-
-  /* v1-0a: モバイル幅でタッチ UI に切替 */
-  .hex-pad-overlay { display: block; }
-  /* 下段の大きな hex-pad は PC / タブレット用。モバイルでは overlay を優先。
-     hex-pad-wrap 全体は残す(説明文が入っているため)、.hex-pad のみ非表示。 */
-  .hex-pad { display: none; }
 }
 
 .map-tools {
