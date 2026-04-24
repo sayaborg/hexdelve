@@ -13,6 +13,12 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
+  /* v1-0a: モバイルでのダブルタップズーム / 長押しメニュー / オーバースクロール抑制。
+     ピンチズーム(指 2 本)は維持される。 */
+  touch-action: manipulation;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 .app {
   max-width: 1120px;
@@ -47,6 +53,13 @@ canvas {
   background: #0e141a;
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+/* v1-0a: 主画面はジェスチャ処理が JS 側で行われるため、ブラウザのデフォルト
+   ジェスチャ(スクロール、ズーム等)を完全抑制。JS 側でも canvas.style.touchAction = 'none'
+   を設定するが、CSS で宣言しておくことで JS 実行前のタッチも抑制される。 */
+#mainCanvas {
+  touch-action: none;
 }
 
 /* v1-0a(NEXT_STEPS §2.1): 主画面オーバーレイ用フレーム */

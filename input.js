@@ -99,56 +99,54 @@ export function bindMainCanvasGestures(handlers) {
     };
   };
 
-  canvas.addEventListener('pointerdown', (event) => {
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    canvas.setPointerCapture?.(event.pointerId);
+  // ------ 共通ハンドラ(touch / mouse から呼ばれる) ------
+
+  const onStart = (clientX, clientY) => {
     isPressed = true;
-    startClientX = event.clientX;
-    startClientY = event.clientY;
+    startClientX = clientX;
+    startClientY = clientY;
     startFacing = handlers.getCurrentPreviewFacing?.() ?? 0;
     const center = getCenter();
-    startAngleDeg = angleFromCenter(event.clientX, event.clientY, center.cx, center.cy);
+    startAngleDeg = angleFromCenter(clientX, clientY, center.cx, center.cy);
     movedBeyondTapThreshold = false;
-    event.preventDefault();
-  });
+  };
 
-  canvas.addEventListener('pointermove', (event) => {
+  const onMove = (clientX, clientY) => {
     if (!isPressed) return;
-    const dx = event.clientX - startClientX;
-    const dy = event.clientY - startClientY;
+    const dx = clientX - startClientX;
+    const dy = clientY - startClientY;
     if (!movedBeyondTapThreshold && Math.hypot(dx, dy) >= TAP_THRESHOLD_PX) {
       movedBeyondTapThreshold = true;
     }
     if (!movedBeyondTapThreshold) return;
 
-    // スワイプ:画面中心を軸にしたポインタの角度差で facing を決定
+    // スワイプ:画面中心を軸にしたポインタの角度差で facing を決定。
+    // 「指の回転方向 = 画面上の世界の回転方向」= プレイヤーは逆向きに回頭(地図アプリ的な直感)。
     const center = getCenter();
-    const currentAngle = angleFromCenter(event.clientX, event.clientY, center.cx, center.cy);
+    const currentAngle = angleFromCenter(clientX, clientY, center.cx, center.cy);
     if (startAngleDeg === null || currentAngle === null) return;
     let delta = currentAngle - startAngleDeg;
     while (delta > 180) delta -= 360;
     while (delta < -180) delta += 360;
-    const steps = Math.round(delta / 60);
+    const steps = -Math.round(delta / 60);  // 符号反転:指の動き ↔ プレイヤー回頭方向
     const newFacing = (startFacing + steps + 6000) % 6;
     handlers.setPreviewFacing?.(newFacing, { silent: true });
-  });
+  };
 
-  const finishPointer = (event, { cancelled = false } = {}) => {
+  const onEnd = (clientX, clientY, { cancelled = false } = {}) => {
     if (!isPressed) return;
     isPressed = false;
-    canvas.releasePointerCapture?.(event.pointerId);
     if (cancelled) return;
 
     if (movedBeyondTapThreshold) {
-      // スワイプ終了:facing は pointermove で既に反映済み。log を 1 回だけ出して確定。
       handlers.commitSwipeFacing?.();
       return;
     }
 
     // タップ:画面中心からのベクトルで 7 ゾーン判定
     const center = getCenter();
-    const dx = event.clientX - center.cx;
-    const dy = event.clientY - center.cy;
+    const dx = clientX - center.cx;
+    const dy = clientY - center.cy;
     const dist = Math.hypot(dx, dy);
     const centerZoneRadius = Math.min(center.rect.width, center.rect.height) * CENTER_ZONE_RATIO;
 
@@ -161,10 +159,62 @@ export function bindMainCanvasGestures(handlers) {
     handlers.tryMove?.(localMove);
   };
 
-  canvas.addEventListener('pointerup', (event) => finishPointer(event));
-  canvas.addEventListener('pointercancel', (event) => finishPointer(event, { cancelled: true }));
+  // ------ Touch events(モバイル)------
+  // iOS Chrome 含む全モバイルブラウザで確実に動かすため pointer events は使わない。
+  // touchmove は passive: false + preventDefault でブラウザのスクロールを抑制。
 
-  // スクロール/ズーム等のブラウザデフォルトジェスチャとの干渉を防ぐ
+  canvas.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 1) return;  // マルチタッチは無視(ピンチズーム等)
+    event.preventDefault();
+    const t = event.touches[0];
+    onStart(t.clientX, t.clientY);
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (event) => {
+    if (event.touches.length !== 1) return;
+    event.preventDefault();
+    const t = event.touches[0];
+    onMove(t.clientX, t.clientY);
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', (event) => {
+    const t = event.changedTouches[0];
+    if (!t) return;
+    onEnd(t.clientX, t.clientY);
+  });
+
+  canvas.addEventListener('touchcancel', (event) => {
+    const t = event.changedTouches[0];
+    onEnd(t?.clientX ?? 0, t?.clientY ?? 0, { cancelled: true });
+  });
+
+  // ------ Mouse events(PC)------
+  // モバイルブラウザは touch 発火後に mousedown を発火しないのが一般的だが、
+  // 念のため isPressed で二重起動を防ぐ(touch 中は mouse 側が無視される)。
+
+  canvas.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return;
+    if (isPressed) return;
+    onStart(event.clientX, event.clientY);
+  });
+
+  canvas.addEventListener('mousemove', (event) => {
+    if (!isPressed) return;
+    onMove(event.clientX, event.clientY);
+  });
+
+  canvas.addEventListener('mouseup', (event) => {
+    if (!isPressed) return;
+    onEnd(event.clientX, event.clientY);
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (isPressed) {
+      onEnd(0, 0, { cancelled: true });
+    }
+  });
+
+  // CSS 側で canvas の touch-action を固定(JS 実行前でも効くように)。
   canvas.style.touchAction = 'none';
 }
 
