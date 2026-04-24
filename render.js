@@ -281,24 +281,55 @@ export function updateStatusBox(state) {
   `;
 }
 
+// v1-0a(NEXT_STEPS §2.1): enemy_status_box 本番仕様。
+//   通常時: visible に含まれる敵のみ、名前 / HP / 距離を表示(知覚軸経由のみ露出原則)。
+//   debug overlay ON 時: 全敵の全情報(id, mode, pos, facing, HP, wt, homePos, lastSeenPos)を表示。
+//
+// nearAware のみで捉えている敵(FOV 外の隣接敵等)は通常時に表示しない。v0 では全敵公開だったが、
+// v1 原則「知覚軸経由のみ露出」(PRINCIPLES §8)に合わせて情報量を絞る。将来的に「気配:N 体」等を
+// 追加する余地あり(v1 設計内での拡張)。
 export function updateEnemyStatusBox(state) {
   const box = document.getElementById('enemyStatusBox');
+  if (!box) return;
+
   if (state.enemies.length === 0) {
     box.innerHTML = '<div class="small">敵は全滅。</div>';
     return;
   }
 
-  box.innerHTML = `<div class="small">敵ステータス（試用向けに全公開）</div>` + state.enemies.map((enemy) => `
-    <div class="enemy-row">
-      <div class="enemy-title"><span>${enemy.id} ${enemy.name}</span><span>${enemy.mode}</span></div>
-      <div class="status-row"><span>位置</span><strong>q:${enemy.pos.q} r:${enemy.pos.r}</strong></div>
-      <div class="status-row"><span>向き</span><strong>${HEADING_LABELS[enemy.facing]}</strong></div>
-      <div class="status-row"><span>HP</span><strong>${enemy.hp} / ${enemy.maxHp}</strong></div>
-      <div class="status-row"><span>wt</span><strong>${enemy.wt}</strong></div>
-      <div class="status-row"><span>帰投先</span><strong>q:${enemy.homePos.q} r:${enemy.homePos.r}</strong></div>
-      <div class="status-row"><span>最終発見地点</span><strong>${enemy.lastSeenPlayerPos ? `q:${enemy.lastSeenPlayerPos.q} r:${enemy.lastSeenPlayerPos.r}` : '-'}</strong></div>
-    </div>
-  `).join('');
+  if (state.debugOverlay) {
+    // debug 全情報(v0 互換の開発者向け出力)
+    box.innerHTML = `<div class="small">敵ステータス(debug overlay: 全公開)</div>` + state.enemies.map((enemy) => `
+      <div class="enemy-row">
+        <div class="enemy-title"><span>${enemy.id} ${enemy.name}</span><span>${enemy.mode}</span></div>
+        <div class="status-row"><span>位置</span><strong>q:${enemy.pos.q} r:${enemy.pos.r}</strong></div>
+        <div class="status-row"><span>向き</span><strong>${HEADING_LABELS[enemy.facing]}</strong></div>
+        <div class="status-row"><span>HP</span><strong>${enemy.hp} / ${enemy.maxHp}</strong></div>
+        <div class="status-row"><span>wt</span><strong>${enemy.wt}</strong></div>
+        <div class="status-row"><span>帰投先</span><strong>q:${enemy.homePos.q} r:${enemy.homePos.r}</strong></div>
+        <div class="status-row"><span>最終発見地点</span><strong>${enemy.lastSeenPlayerPos ? `q:${enemy.lastSeenPlayerPos.q} r:${enemy.lastSeenPlayerPos.r}` : '-'}</strong></div>
+      </div>
+    `).join('');
+    return;
+  }
+
+  // 通常表示: visible のみ、名前 / HP / 距離。
+  const visibleEnemies = state.enemies.filter((enemy) => state.visible.has(enemy.pos.key()));
+
+  if (visibleEnemies.length === 0) {
+    box.innerHTML = '<div class="small">視界内に敵はいない。</div>';
+    return;
+  }
+
+  box.innerHTML = `<div class="small">視界内の敵(${visibleEnemies.length}体)</div>` + visibleEnemies.map((enemy) => {
+    const dist = hexDistance(enemy.pos, state.playerPos);
+    return `
+      <div class="enemy-row">
+        <div class="enemy-title"><span>${enemy.name}</span><span>距離 ${dist}</span></div>
+        <div class="status-row"><span>HP</span><strong>${enemy.hp} / ${enemy.maxHp}</strong></div>
+      </div>
+    `;
+  }).join('');
 }
 
 export function renderMain(state) {
