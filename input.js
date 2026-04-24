@@ -1,7 +1,12 @@
 export function bindControls(handlers) {
   document.getElementById('rotateLeftBtn').addEventListener('click', () => handlers.rotatePreview(-1));
   document.getElementById('rotateRightBtn').addEventListener('click', () => handlers.rotatePreview(1));
-  document.getElementById('waitBtn').addEventListener('click', handlers.waitAction);
+
+  // v1-0a(NEXT_STEPS §2.1): 待機ボタンはオーバーレイと下段の 2 箇所に存在しうる。
+  // data-wait-btn 属性で全インスタンスを捕捉。
+  document.querySelectorAll('[data-wait-btn]').forEach((button) => {
+    button.addEventListener('click', handlers.waitAction);
+  });
 
   document.querySelectorAll('[data-local-move]').forEach((button) => {
     button.addEventListener('click', () => {

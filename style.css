@@ -48,6 +48,65 @@ canvas {
   border: 1px solid var(--line);
   border-radius: 10px;
 }
+
+/* v1-0a(NEXT_STEPS §2.1): 主画面オーバーレイ用フレーム */
+.canvas-frame {
+  position: relative;
+}
+
+/* タッチ向け 6 方向 + 中心待機オーバーレイ。モバイル幅のみ表示。
+   主画面 canvas の右下隅に絶対配置。コンテナ自体は pointer-events を透過し、
+   ボタンだけ捕捉する(背景部分は主画面タップ=スワイプ回頭の邪魔をしないため)。 */
+.hex-pad-overlay {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  width: 180px;
+  height: 170px;
+  display: none;
+  pointer-events: none;
+  z-index: 2;
+}
+.hex-pad-overlay .hex-overlay-btn {
+  pointer-events: auto;
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(32, 42, 53, 0.72);
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.hex-pad-overlay .hex-overlay-btn:active {
+  background: rgba(124, 199, 255, 0.45);
+}
+/* 六角形配置(下段 .hex-pad と同じ規則、サイズだけ縮小)。
+   dir-X と data-local-move の対応は下段と同一(layout 再利用)。 */
+.hex-pad-overlay .dir-2 { left: 66px; top: 0; }
+.hex-pad-overlay .dir-1 { right: 8px;  top: 28px; }
+.hex-pad-overlay .dir-3 { left: 8px;   top: 28px; }
+.hex-pad-overlay .dir-0 { right: 8px;  bottom: 28px; }
+.hex-pad-overlay .dir-4 { left: 8px;   bottom: 28px; }
+.hex-pad-overlay .dir-5 { left: 66px;  bottom: 0; }
+.hex-pad-overlay .wait-overlay {
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 15px;
+  background: rgba(124, 199, 255, 0.22);
+  border-color: rgba(124, 199, 255, 0.45);
+}
+.hex-pad-overlay .wait-overlay:active {
+  background: rgba(124, 199, 255, 0.55);
+}
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -183,6 +242,12 @@ button:hover { background: #253242; }
 }
 @media (max-width: 860px) {
   .views, .footer-grid { grid-template-columns: 1fr; }
+
+  /* v1-0a: モバイル幅でタッチ UI に切替 */
+  .hex-pad-overlay { display: block; }
+  /* 下段の大きな hex-pad は PC / タブレット用。モバイルでは overlay を優先。
+     hex-pad-wrap 全体は残す(説明文が入っているため)、.hex-pad のみ非表示。 */
+  .hex-pad { display: none; }
 }
 
 .map-tools {

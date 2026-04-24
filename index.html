@@ -23,7 +23,21 @@
       <div class="panel">
         <h2>主画面 Canvas</h2>
         <p>プレイヤー基準・仮向き追従。敵は可視時に向きも表示する。近接知覚時は存在だけ分かる。</p>
-        <canvas id="mainCanvas" width="520" height="520"></canvas>
+        <div class="canvas-frame">
+          <canvas id="mainCanvas" width="520" height="520"></canvas>
+          <!-- v1-0a(NEXT_STEPS §2.1): タッチ向け 6 方向 + 中心待機オーバーレイ。
+               モバイル幅でのみ表示(CSS の @media で切替)。ボタンは既存 data-local-move /
+               data-wait-btn を再利用するため、input.js の bindControls がそのまま動く。 -->
+          <div class="hex-pad-overlay" aria-hidden="false">
+            <button class="hex-overlay-btn dir-2" data-local-move="0" type="button" aria-label="前へ移動">↑</button>
+            <button class="hex-overlay-btn dir-1" data-local-move="1" type="button" aria-label="右前へ移動">↗</button>
+            <button class="hex-overlay-btn dir-3" data-local-move="5" type="button" aria-label="左前へ移動">↖</button>
+            <button class="hex-overlay-btn dir-0" data-local-move="2" type="button" aria-label="右後へ移動">↘</button>
+            <button class="hex-overlay-btn dir-4" data-local-move="4" type="button" aria-label="左後へ移動">↙</button>
+            <button class="hex-overlay-btn dir-5" data-local-move="3" type="button" aria-label="後へ移動">↓</button>
+            <button class="hex-overlay-btn wait-overlay" data-wait-btn type="button" aria-label="待機">Z</button>
+          </div>
+        </div>
         <div class="legend">
           <span class="chip"><span class="swatch" style="background:#06080b"></span>未知</span>
           <span class="chip"><span class="swatch" style="background:#26313c"></span>既知の壁</span>
@@ -90,7 +104,7 @@
               <button class="hex-btn dir-0" data-local-move="2" type="button">↘ 右後</button>
               <button class="hex-btn dir-4" data-local-move="4" type="button">↙ 左後</button>
               <button class="hex-btn dir-5" data-local-move="3" type="button">↓ 後</button>
-              <button class="wait-btn" id="waitBtn" type="button">待機</button>
+              <button class="wait-btn" id="waitBtn" data-wait-btn type="button">待機</button>
             </div>
             <div class="control-note">
               回頭は無料で、行動を確定した瞬間に仮向きが確定向きへ反映される。<br>
