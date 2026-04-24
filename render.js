@@ -195,9 +195,40 @@ function drawKeyholeIcon(ctx, cx, cy, tileRadius) {
   ctx.stroke();
 }
 
+// v1-0a(S6): 六角柱の側面描画。
+// 天面六角の南3辺(edge 0→1=SE斜辺、1→2=底辺、2→3=SW斜辺)に対応する台形を、
+// 下に lift 分だけ下げた底辺と繋いで描画する。
+// polygonCorners の角度規則(0°=右、60°刻み時計回り、y 軸下向き)と整合。
+function drawHexPillarSide(ctx, cx, cy, size, lift, fillColor, strokeColor) {
+  const top = polygonCorners(cx, cy, size);
+  const bottom = polygonCorners(cx, cy + lift, size);
+
+  // 南 3 辺:corner 0→1 (SE)、1→2 (S)、2→3 (SW)
+  for (let i = 0; i < 3; i += 1) {
+    const p0 = top[i];
+    const p1 = top[(i + 1) % 6];
+    const q0 = bottom[i];
+    const q1 = bottom[(i + 1) % 6];
+
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.lineTo(q1.x, q1.y);
+    ctx.lineTo(q0.x, q0.y);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    if (strokeColor) {
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+}
+
 // v1-0a(S6): モデル A 六角柱ドア(NEXT_STEPS §2.1、CHANGELOG フェーズ 40 D31)。
 //   - open   : Z=0、床と同じ高さのフラット塗り(v0 互換の緑系)
-//   - closed : Z+h で立った六角柱(下地 threshold + 南側影 + 天面)
+//   - closed : Z+h で立った六角柱(下地 threshold + 南3辺の側面 + 天面)
 //   - locked : closed と同じ柱 + 中心に鍵穴アイコン
 // 影の方向は世界座標の南固定(world 回転の内側で描画、world と一緒に回る=
 //  「太陽が南中」表現)。世界が回っても影は常に世界の南側に落ちる。
@@ -217,14 +248,14 @@ function drawDoorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const ground = SPRITE_PALETTES[mode].threshold;
   drawHex(ctx, cx, cy, tileRadius - 1, ground.fill, ground.stroke);
 
-  // Layer 2: 側面陰影(南側にオフセットした暗い六角形)
-  // 暗さは mode によらず side 色(fill を -35% 暗く)、主画面でのみ影を強調。
-  const lift = Math.max(2, tileRadius * 0.18);
-  const sideColor = shadeColor(palette.fill, -0.35);
-  drawHex(ctx, cx, cy + lift, tileRadius - 2, sideColor, sideColor);
+  // Layer 2: 柱の南 3 辺側面(下に lift 分だけ降りる台形を 3 枚)
+  // 側面色は天面色 -40% 暗く、縁は側面色と同じでエッジを目立たせない
+  const lift = Math.max(3, tileRadius * 0.30);
+  const sideColor = shadeColor(palette.fill, -0.40);
+  drawHexPillarSide(ctx, cx, cy, tileRadius - 1, lift, sideColor, sideColor);
 
-  // Layer 3: 天面(ほぼ元位置、少し小さめで立体感)
-  drawHex(ctx, cx, cy, tileRadius - 2, palette.fill, palette.stroke);
+  // Layer 3: 天面(元位置、通常色、柱の上面)
+  drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
 
   // locked: 中心に鍵穴アイコン(visible モードで tileRadius 十分な時のみ)
   if (spriteKey.state === 'locked' && mode === 'visible' && tileRadius >= 10) {
