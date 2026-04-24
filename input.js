@@ -39,6 +39,22 @@ export function bindKeyboard(handlers) {
       return;
     }
 
+    // F3: debug overlay トグル(v1-0a、NEXT_STEPS §2.1)。
+    // ゲームオーバー時もトグル可能(デバッグ用途のため)。
+    if (event.key === 'F3') {
+      event.preventDefault();
+      handlers.toggleDebugOverlay?.();
+      return;
+    }
+
+    // Z: 待機ショートカット(v1-0a)。
+    // QWEASD の移動キーと同じ左手エリアに配置。待機ボタンクリックと完全に同じ挙動。
+    if (key === 'z') {
+      event.preventDefault();
+      handlers.waitAction?.();
+      return;
+    }
+
     const keyToLocalMove = { q: 5, w: 0, e: 1, a: 4, s: 3, d: 2 };
     if (key in keyToLocalMove) {
       event.preventDefault();

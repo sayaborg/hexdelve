@@ -341,6 +341,41 @@ export function renderMain(state) {
   drawLabel(ctx, originX, originY + 58, '主画面中央 = プレイヤー位置', CONFIG.colors.muted, 12);
 }
 
+// v1-0a(NEXT_STEPS §2.1): 副画面の worldRadius 境界描画。
+// world は radius=R の hex disk。その外接六角形を、6 コーナータイル
+// (R,0) (R,-R) (0,-R) (-R,0) (-R,R) (0,R) の中心からさらに外向きに
+// tileRadius 分押し出した 6 点を結んで描く。副画面で「ここから外はワールド外」を
+// 視覚的に示す。主画面では描かない(プレイヤー周辺のみ描画のため)。
+function drawWorldBoundary(ctx, tileRadius, originX, originY, radius) {
+  const cornerHexes = [
+    { q:  radius, r:  0       },
+    { q:  radius, r: -radius  },
+    { q:  0,      r: -radius  },
+    { q: -radius, r:  0       },
+    { q: -radius, r:  radius  },
+    { q:  0,      r:  radius  },
+  ];
+  const points = cornerHexes.map((hex) => {
+    const center = hexToPixel(hex, tileRadius, originX, originY);
+    const dx = center.x - originX;
+    const dy = center.y - originY;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return { x: center.x, y: center.y };
+    const k = (len + tileRadius) / len;
+    return { x: originX + dx * k, y: originY + dy * k };
+  });
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = CONFIG.colors.worldBoundary;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
 export function renderSub(state) {
   const canvas = document.getElementById('subCanvas');
   const ctx = canvas.getContext('2d');
@@ -365,6 +400,9 @@ export function renderSub(state) {
   for (const cell of state.allWorldCells) {
     drawEntityOverlay(ctx, cell, cell, tileRadius, originX, originY, state);
   }
+
+  // v1-0a: worldRadius 境界を描画。タイル・階段辺・主体よりも上のレイヤ。
+  drawWorldBoundary(ctx, tileRadius, originX, originY, state.config.worldRadius);
 
   const playerPixel = hexToPixel(state.playerPos, tileRadius, originX, originY);
   drawFacingArrow(ctx, playerPixel.x, playerPixel.y, HEADING_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, tileRadius * 2.2);

@@ -91,7 +91,9 @@ export const CONFIG = {
     localRadius: 7,
   },
   sub: {
-    tileRadius: 9,
+    // v1-0a(NEXT_STEPS §2.1): 副画面は worldRadius 全体を表示するため tileRadius=4 固定。
+    // v0 の 9 から変更(9 では world 全体が副画面に入りきらなかった)。
+    tileRadius: 4,
   },
   colors: {
     background: '#0e141a',
@@ -116,6 +118,9 @@ export const CONFIG = {
     preview: '#9be564',
     text: '#dbe7f3',
     muted: '#8ca0b3',
+    // v1-0a(NEXT_STEPS §2.1): 副画面の worldRadius 境界線色。
+    // 落ち着いたブルーグレーで、タイル色と干渉せず視認できる明度を選定。
+    worldBoundary: '#5b7a95',
   },
 };
 

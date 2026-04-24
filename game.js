@@ -29,6 +29,10 @@ const state = {
   currentMapId: CONFIG.defaultGeneratedMapId,
   currentMapName: '',
   currentSeed: null,
+  // v1-0a(NEXT_STEPS §2.1): debug overlay トグル。
+  //   F3 でトグル。OFF 時は internal channel の log / enemy_status_box の視界外情報を隠す。
+  //   S1 時点ではフラグのみ追加、実際の出し分けは S3(log)/S4(enemy_status_box)/S5(render)で反映。
+  debugOverlay: false,
 };
 
 function getLogElement() {
@@ -449,6 +453,15 @@ function waitAction() {
   finishTurn({ type: 'wait' }, enemyPlans);
 }
 
+// v1-0a(NEXT_STEPS §2.1): debug overlay のトグル。
+//   ゲームオーバー時もトグル可能(デバッグ用途)。
+//   S1 時点ではログ表示のみ。実際の UI 出し分けは S3/S4/S5 で実装される。
+function toggleDebugOverlay() {
+  state.debugOverlay = !state.debugOverlay;
+  pushLog('DEBUG', `debug overlay ${state.debugOverlay ? 'ON' : 'OFF'}。`);
+  render(state);
+}
+
 function buildEnemiesFromEntries(entries = []) {
   return entries.map((entry, index) => {
     const kindId = entry.kind ?? 'watcher';
@@ -626,13 +639,13 @@ function bootstrap() {
       resetRunWithGeneratedMap(state.currentMapId);
     },
   });
-  bindKeyboard({ rotatePreview, tryMove });
+  bindKeyboard({ rotatePreview, tryMove, waitAction, toggleDebugOverlay });
   setupMapUi();
 
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  pushLog('INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、待機ボタンで 1 ターン経過。`);
+  pushLog('INIT', `HEX 版 NetHack 風ローグライク v0 初期化。← / → で回頭、Q/W/E/A/S/D で移動、Z または待機ボタンで 1 ターン経過、F3 で debug overlay トグル。`);
 }
 
 bootstrap();
