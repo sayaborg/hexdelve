@@ -161,14 +161,14 @@ export function bindMainCanvasGestures(handlers) {
 
   // ------ Touch events(モバイル)------
   // iOS Chrome 含む全モバイルブラウザで確実に動かすため pointer events は使わない。
-  // touchmove は passive: false + preventDefault でブラウザのスクロールを抑制。
+  // touchstart では preventDefault しない(iOS で後続イベント発火を阻害する可能性回避)。
+  // touchmove は { passive: false } + preventDefault でブラウザのスクロールを抑制。
 
   canvas.addEventListener('touchstart', (event) => {
     if (event.touches.length !== 1) return;  // マルチタッチは無視(ピンチズーム等)
-    event.preventDefault();
     const t = event.touches[0];
     onStart(t.clientX, t.clientY);
-  }, { passive: false });
+  }, { passive: true });
 
   canvas.addEventListener('touchmove', (event) => {
     if (event.touches.length !== 1) return;

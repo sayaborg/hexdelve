@@ -57,10 +57,15 @@ canvas {
 
 /* v1-0a: 主画面はジェスチャ処理が JS 側で行われるため、ブラウザのデフォルト
    ジェスチャ(スクロール、ズーム等)を完全抑制。JS 側でも canvas.style.touchAction = 'none'
-   を設定するが、CSS で宣言しておくことで JS 実行前のタッチも抑制される。 */
+   を設定するが、CSS で宣言しておくことで JS 実行前のタッチも抑制される。
+   cursor: pointer + tabindex="0"(HTML) は iOS Safari/Chrome で canvas を interactive
+   要素として認識させる定番ハック。これがないと iOS でタッチイベントが発火しないことがある。 */
 #mainCanvas {
   touch-action: none;
+  cursor: pointer;
+  outline: none;
 }
+#mainCanvas:focus { outline: none; }
 
 /* v1-0a(NEXT_STEPS §2.1): 主画面オーバーレイ用フレーム */
 .canvas-frame {
