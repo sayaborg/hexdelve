@@ -140,20 +140,95 @@ function drawWallSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
   drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
 }
 
-// S5 暫定: v0 互換の「色分け + D/L ラベル」を維持。
-// S6 でモデル A 六角柱ドア描画に置き換える。
+// v1-0a(S6): shadeColor - 色の明度を +/- amount で補正。closed/locked ドアの側面陰影用。
+function shadeColor(hexOrRgb, amount) {
+  // hex (#rrggbb) または rgb(r,g,b) を受け付ける
+  let r, g, b;
+  if (hexOrRgb.startsWith('#')) {
+    r = parseInt(hexOrRgb.slice(1, 3), 16);
+    g = parseInt(hexOrRgb.slice(3, 5), 16);
+    b = parseInt(hexOrRgb.slice(5, 7), 16);
+  } else {
+    const m = hexOrRgb.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    if (!m) return hexOrRgb;
+    r = parseInt(m[1], 10);
+    g = parseInt(m[2], 10);
+    b = parseInt(m[3], 10);
+  }
+  const factor = 1 + amount;
+  const cr = Math.max(0, Math.min(255, Math.round(r * factor)));
+  const cg = Math.max(0, Math.min(255, Math.round(g * factor)));
+  const cb = Math.max(0, Math.min(255, Math.round(b * factor)));
+  return `rgb(${cr},${cg},${cb})`;
+}
+
+// v1-0a(S6): 鍵穴アイコン。locked ドアの中心に描画。
+// 上部の円 + 下部の縦棒(テーパー状)の 2 パーツ構成、金色系。
+function drawKeyholeIcon(ctx, cx, cy, tileRadius) {
+  const r = Math.max(2, tileRadius * 0.14);
+  const color = '#f0c040';
+  const stroke = '#2a1a00';
+
+  // 上部の円(鍵穴の穴)
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.3, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = Math.max(1, r * 0.25);
+  ctx.fill();
+  ctx.stroke();
+
+  // 下部の縦棒(鍵差し込み口)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 0.3);
+  ctx.lineTo(cx, cy + r * 1.6);
+  ctx.strokeStyle = color;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = r * 0.9;
+  ctx.stroke();
+  // 縁取り
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 0.3);
+  ctx.lineTo(cx, cy + r * 1.6);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = Math.max(1, r * 0.2);
+  ctx.stroke();
+}
+
+// v1-0a(S6): モデル A 六角柱ドア(NEXT_STEPS §2.1、CHANGELOG フェーズ 40 D31)。
+//   - open   : Z=0、床と同じ高さのフラット塗り(v0 互換の緑系)
+//   - closed : Z+h で立った六角柱(下地 threshold + 南側影 + 天面)
+//   - locked : closed と同じ柱 + 中心に鍵穴アイコン
+// 影の方向は世界座標の南固定(world 回転の内側で描画、world と一緒に回る=
+//  「太陽が南中」表現)。世界が回っても影は常に世界の南側に落ちる。
 function drawDoorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
-  const keyMap = { closed: 'doorClosed', locked: 'doorLocked', open: 'doorOpen' };
-  const paletteKey = keyMap[spriteKey.state] ?? 'doorClosed';
+  // open: フラット塗りのみ(床同化)
+  if (spriteKey.state === 'open') {
+    const palette = SPRITE_PALETTES[mode].doorOpen;
+    drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
+    return;
+  }
+
+  // closed / locked: 六角柱描画
+  const paletteKey = spriteKey.state === 'locked' ? 'doorLocked' : 'doorClosed';
   const palette = SPRITE_PALETTES[mode][paletteKey];
-  drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
-  if (tileRadius >= 10 && mode === 'visible') {
-    let label = null;
-    if (spriteKey.state === 'closed') label = 'D';
-    else if (spriteKey.state === 'locked') label = 'L';
-    if (label) {
-      drawLabel(ctx, cx, cy - 5, label, CONFIG.colors.text, Math.max(9, Math.floor(tileRadius * 0.42)));
-    }
+
+  // Layer 1: 下地(タイルの足元、threshold の床色)
+  const ground = SPRITE_PALETTES[mode].threshold;
+  drawHex(ctx, cx, cy, tileRadius - 1, ground.fill, ground.stroke);
+
+  // Layer 2: 側面陰影(南側にオフセットした暗い六角形)
+  // 暗さは mode によらず side 色(fill を -35% 暗く)、主画面でのみ影を強調。
+  const lift = Math.max(2, tileRadius * 0.18);
+  const sideColor = shadeColor(palette.fill, -0.35);
+  drawHex(ctx, cx, cy + lift, tileRadius - 2, sideColor, sideColor);
+
+  // Layer 3: 天面(ほぼ元位置、少し小さめで立体感)
+  drawHex(ctx, cx, cy, tileRadius - 2, palette.fill, palette.stroke);
+
+  // locked: 中心に鍵穴アイコン(visible モードで tileRadius 十分な時のみ)
+  if (spriteKey.state === 'locked' && mode === 'visible' && tileRadius >= 10) {
+    drawKeyholeIcon(ctx, cx, cy, tileRadius);
   }
 }
 
