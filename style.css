@@ -54,15 +54,13 @@ canvas {
   position: relative;
 }
 
-/* タッチ向け 6 方向 + 中心待機オーバーレイ。モバイル幅のみ表示。
-   主画面 canvas の右下隅に絶対配置。コンテナ自体は pointer-events を透過し、
-   ボタンだけ捕捉する(背景部分は主画面タップ=スワイプ回頭の邪魔をしないため)。 */
+/* タッチ向け 6 方向 + 中心待機オーバーレイ(モバイル幅のみ表示)。
+   主画面 canvas 全体を覆い、中央(プレイヤー位置)から HEX 6 方向に大きなボタンを配置。
+   主画面内の大部分がタップ領域となる設計。
+   コンテナ自体は pointer-events を透過、ボタンのみ捕捉(スワイプ回頭=S9 の邪魔をしないため)。 */
 .hex-pad-overlay {
   position: absolute;
-  bottom: 10px;
-  right: 10px;
-  width: 180px;
-  height: 170px;
+  inset: 0;
   display: none;
   pointer-events: none;
   z-index: 2;
@@ -70,40 +68,50 @@ canvas {
 .hex-pad-overlay .hex-overlay-btn {
   pointer-events: auto;
   position: absolute;
-  width: 48px;
-  height: 48px;
+  width: 80px;
+  height: 80px;
   min-width: 0;
   padding: 0;
   border-radius: 50%;
-  background: rgba(32, 42, 53, 0.72);
-  color: var(--text);
-  font-size: 18px;
+  background: rgba(32, 42, 53, 0.28);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 22px;
   font-weight: 700;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border: 1.5px solid rgba(255, 255, 255, 0.20);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
   -webkit-tap-highlight-color: transparent;
   user-select: none;
-}
-.hex-pad-overlay .hex-overlay-btn:active {
-  background: rgba(124, 199, 255, 0.45);
-}
-/* 六角形配置(下段 .hex-pad と同じ規則、サイズだけ縮小)。
-   dir-X と data-local-move の対応は下段と同一(layout 再利用)。 */
-.hex-pad-overlay .dir-2 { left: 66px; top: 0; }
-.hex-pad-overlay .dir-1 { right: 8px;  top: 28px; }
-.hex-pad-overlay .dir-3 { left: 8px;   top: 28px; }
-.hex-pad-overlay .dir-0 { right: 8px;  bottom: 28px; }
-.hex-pad-overlay .dir-4 { left: 8px;   bottom: 28px; }
-.hex-pad-overlay .dir-5 { left: 66px;  bottom: 0; }
-.hex-pad-overlay .wait-overlay {
-  left: 50%; top: 50%;
+  cursor: pointer;
   transform: translate(-50%, -50%);
-  font-size: 15px;
-  background: rgba(124, 199, 255, 0.22);
-  border-color: rgba(124, 199, 255, 0.45);
+  transition: background 0.1s ease;
 }
+/* :active は iOS Safari で不安定なため、input.js で touchstart/touchend から
+   .pressed クラスを付け外しする(下 @media 内で発光)。 */
+.hex-pad-overlay .hex-overlay-btn.pressed,
+.hex-pad-overlay .hex-overlay-btn:active {
+  background: rgba(124, 199, 255, 0.55);
+  border-color: rgba(124, 199, 255, 0.9);
+}
+/* 中央(プレイヤー位置)から HEX 6 方向に均等配置。各ボタン中央を
+   translate(-50%, -50%) で指定座標に合わせる。
+   角度は N/NE/SE/S/SW/NW、半径は画面短辺の約 25%。
+   dir-X クラスの意味論(= CSS レイアウト上の「どの方向のボタンか」)は下段 .hex-pad と同じ。 */
+.hex-pad-overlay .dir-2 { top: 22%;   left: 50%; }  /* ↑ 前 */
+.hex-pad-overlay .dir-1 { top: 36%;   left: 72%; }  /* ↗ 右前 */
+.hex-pad-overlay .dir-0 { top: 64%;   left: 72%; }  /* ↘ 右後 */
+.hex-pad-overlay .dir-5 { top: 78%;   left: 50%; }  /* ↓ 後 */
+.hex-pad-overlay .dir-4 { top: 64%;   left: 28%; }  /* ↙ 左後 */
+.hex-pad-overlay .dir-3 { top: 36%;   left: 28%; }  /* ↖ 左前 */
+.hex-pad-overlay .wait-overlay {
+  top: 50%; left: 50%;
+  width: 72px; height: 72px;
+  font-size: 18px;
+  background: rgba(124, 199, 255, 0.18);
+  border-color: rgba(124, 199, 255, 0.38);
+}
+.hex-pad-overlay .wait-overlay.pressed,
 .hex-pad-overlay .wait-overlay:active {
   background: rgba(124, 199, 255, 0.55);
 }

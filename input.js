@@ -14,6 +14,18 @@ export function bindControls(handlers) {
     });
   });
 
+  // v1-0a(NEXT_STEPS §2.1): オーバーレイボタンのタップフィードバック。
+  // iOS Safari では button :active が安定して発火しないため、touchstart/touchend で
+  // 手動で .pressed クラスを付け外しする(CSS 側と連動)。
+  // pointerevents 系だとデスクトップとタッチで挙動が混ざるので、touch event のみに限定。
+  document.querySelectorAll('.hex-pad-overlay .hex-overlay-btn').forEach((button) => {
+    const press = () => button.classList.add('pressed');
+    const release = () => button.classList.remove('pressed');
+    button.addEventListener('touchstart', press, { passive: true });
+    button.addEventListener('touchend', release);
+    button.addEventListener('touchcancel', release);
+  });
+
   const mapSelect = document.getElementById('mapSelect');
   const resetMapBtn = document.getElementById('resetMapBtn');
 
