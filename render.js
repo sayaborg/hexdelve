@@ -317,9 +317,17 @@ function getTileSprite(cell) {
 
 // getTileRotation(cell) → degrees
 // タイル単位の個別回転(world 全体回転とは独立)。
-// v1-0a 時点では常に 0(stairs の個別回転は S7 で実装)。variant/rotation の弱い反映は
-// drawer 内で直接扱う。
+// v1-0a(S7): 階段タイルは enterHeading 方向が画面上向き(-90°)になるよう回転。
+//   「enterHeading が画面上」= 世界座標で enterHeading 方向のディテールが画面の上を向く。
+//   世界回転と合成されるので、プレイヤーから見ると「階段の進行方向」が明示される。
+//   v1-0b の PNG 差し替え時、階段スプライトの段々/矢印が正しい向きで描画される。
+// 他のタイルは 0(個別回転なし)。
 function getTileRotation(cell) {
+  const feature = getFeature(cell);
+  if (feature?.kind === 'stairs') {
+    const enterHeading = feature.params?.enterHeading ?? 0;
+    return -90 - HEADING_ANGLES_DEG[enterHeading];
+  }
   return 0;
 }
 
