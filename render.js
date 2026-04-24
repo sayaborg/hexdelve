@@ -6,7 +6,7 @@ import {
   hexToPixel,
   polygonCorners,
 } from './hex.js';
-import { canStandAt, getFeature, getSourceCellAt } from './map.js';
+import { getFeature, getVisualCellAt } from './map.js';
 
 function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
   const corners = polygonCorners(centerX, centerY, size);
@@ -30,6 +30,250 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
   ctx.textBaseline = 'middle';
   ctx.fillText(text, x, y);
 }
+
+// ==============================================================================
+// v1-0a(NEXT_STEPS §2.1): タイル天面スプライトシステム(Layer 1)
+// ==============================================================================
+//
+// 構造(論点 C 合意 2026-04-24):
+//   spriteKey = { kind, state, variant, rotation }
+//     kind:     'room' | 'corridor' | 'threshold' | 'wall' | 'door' | 'stairs' | 'void'
+//     state:    door: 'closed'|'open'|'locked'、stairs: 'up'|'down'(verticalMode)、他は null
+//     variant:  0..3(visualsByKey に焼き込み済み、座標決定的)
+//     rotation: 0..5(同上)
+//
+// drawer 辞書 SPRITE_DRAWERS に kind → 描画関数をマッピング。
+// v1-0a は programmatic 描画(論点 B 合意:弱く表現)。
+// v1-0b で drawer を PNG 描画に差し替え予定。
+// ==============================================================================
+
+// タイル色のバリアント補正(輝度微調整、±5% 以内)。
+function shiftColorByVariant(hexColor, variant) {
+  const r = parseInt(hexColor.slice(1, 3), 16);
+  const g = parseInt(hexColor.slice(3, 5), 16);
+  const b = parseInt(hexColor.slice(5, 7), 16);
+  const factor = [0.95, 0.98, 1.02, 1.05][variant] ?? 1;
+  const cr = Math.max(0, Math.min(255, Math.round(r * factor)));
+  const cg = Math.max(0, Math.min(255, Math.round(g * factor)));
+  const cb = Math.max(0, Math.min(255, Math.round(b * factor)));
+  return `rgb(${cr},${cg},${cb})`;
+}
+
+// variant/rotation の programmatic 表現(弱め):タイル中心から rotation 方向に小ドット 1 個。
+// tileRadius が小さすぎる場合(副画面)は省略。
+function drawVariantDot(ctx, cx, cy, tileRadius, rotation, color) {
+  if (tileRadius < 6) return;
+  const angleDeg = HEADING_ANGLES_DEG[rotation];
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const rr = tileRadius * 0.45;
+  const x = cx + Math.cos(angleRad) * rr;
+  const y = cy + Math.sin(angleRad) * rr;
+  ctx.beginPath();
+  ctx.arc(x, y, Math.max(1, tileRadius * 0.08), 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// 状態色(visible / near / known の 3 モード × kind × 属性)。v0 の getSemanticPalette を移植。
+const SPRITE_PALETTES = {
+  visible: {
+    room:       { fill: CONFIG.colors.floorVisible,  stroke: CONFIG.colors.floorVisibleStroke, dot: '#3d5f78' },
+    corridor:   { fill: '#25516c',                   stroke: '#3c6f90',                        dot: '#4b7d9e' },
+    threshold:  { fill: '#436177',                   stroke: '#6a8ba3',                        dot: '#7aa1b8' },
+    wall:       { fill: CONFIG.colors.wallVisible,   stroke: CONFIG.colors.wallVisibleStroke,  dot: '#5e7a8d' },
+    doorClosed: { fill: '#6a5531',                   stroke: '#b59554' },
+    doorLocked: { fill: '#7a2f3a',                   stroke: '#c55763' },
+    doorOpen:   { fill: '#2f6a5a',                   stroke: '#61a890' },
+    stairs:     { fill: '#4e4b75',                   stroke: '#a5a2d8' },
+  },
+  near: {
+    room:       { fill: CONFIG.colors.floorNear,     stroke: CONFIG.colors.floorNearStroke,    dot: '#403d5e' },
+    corridor:   { fill: '#353357',                   stroke: '#55537b',                        dot: '#4d4b75' },
+    threshold:  { fill: '#4a5165',                   stroke: '#727a92',                        dot: '#656c82' },
+    wall:       { fill: CONFIG.colors.wallNear,      stroke: CONFIG.colors.wallNearStroke,     dot: '#625a78' },
+    doorClosed: { fill: '#62513b',                   stroke: '#8f7756' },
+    doorLocked: { fill: '#6a3138',                   stroke: '#a04753' },
+    doorOpen:   { fill: '#31584e',                   stroke: '#4d8274' },
+    stairs:     { fill: '#403c5e',                   stroke: '#7b78b0' },
+  },
+  known: {
+    room:       { fill: CONFIG.colors.floorKnown,    stroke: CONFIG.colors.floorKnownStroke,   dot: '#283544' },
+    corridor:   { fill: '#1d3040',                   stroke: '#33495d',                        dot: '#2a4356' },
+    threshold:  { fill: '#2a3a47',                   stroke: '#445563',                        dot: '#3b4c5a' },
+    wall:       { fill: CONFIG.colors.wallKnown,     stroke: CONFIG.colors.wallKnownStroke,    dot: '#394754' },
+    doorClosed: { fill: '#544633',                   stroke: '#7b6a50' },
+    doorLocked: { fill: '#522a31',                   stroke: '#7a4048' },
+    doorOpen:   { fill: '#25483f',                   stroke: '#416a5f' },
+    stairs:     { fill: '#322f4a',                   stroke: '#5b5888' },
+  },
+};
+
+function drawRoomSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const palette = SPRITE_PALETTES[mode].room;
+  const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
+  drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
+  drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
+}
+
+function drawCorridorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const palette = SPRITE_PALETTES[mode].corridor;
+  const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
+  drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
+  drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
+}
+
+function drawThresholdSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const palette = SPRITE_PALETTES[mode].threshold;
+  const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
+  drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
+  drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
+}
+
+function drawWallSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const palette = SPRITE_PALETTES[mode].wall;
+  const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
+  drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
+  drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
+}
+
+// S5 暫定: v0 互換の「色分け + D/L ラベル」を維持。
+// S6 でモデル A 六角柱ドア描画に置き換える。
+function drawDoorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const keyMap = { closed: 'doorClosed', locked: 'doorLocked', open: 'doorOpen' };
+  const paletteKey = keyMap[spriteKey.state] ?? 'doorClosed';
+  const palette = SPRITE_PALETTES[mode][paletteKey];
+  drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
+  if (tileRadius >= 10 && mode === 'visible') {
+    let label = null;
+    if (spriteKey.state === 'closed') label = 'D';
+    else if (spriteKey.state === 'locked') label = 'L';
+    if (label) {
+      drawLabel(ctx, cx, cy - 5, label, CONFIG.colors.text, Math.max(9, Math.floor(tileRadius * 0.42)));
+    }
+  }
+}
+
+function drawStairsSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  const palette = SPRITE_PALETTES[mode].stairs;
+  drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
+  if (tileRadius >= 8) {
+    const label = spriteKey.state === 'up' ? '↑' : '↓';
+    const color = mode === 'visible' ? CONFIG.colors.text : CONFIG.colors.muted;
+    drawLabel(ctx, cx, cy - 5, label, color, Math.max(9, Math.floor(tileRadius * 0.42)));
+  }
+}
+
+function drawVoidSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+  // 世界外側の暗タイル。wall パレットを使用。
+  const palette = SPRITE_PALETTES[mode].wall;
+  drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
+}
+
+const SPRITE_DRAWERS = {
+  room:      drawRoomSprite,
+  corridor:  drawCorridorSprite,
+  threshold: drawThresholdSprite,
+  wall:      drawWallSprite,
+  door:      drawDoorSprite,
+  stairs:    drawStairsSprite,
+  void:      drawVoidSprite,
+};
+
+// ==============================================================================
+// Layer 1/2/3 の公開インターフェース
+// ==============================================================================
+
+// getTileSprite(cell) → { kind, state, variant, rotation }
+// visualsByKey の baseToken + runtime.feature.state を合成。
+function getTileSprite(cell) {
+  const visual = getVisualCellAt(cell);
+  if (!visual) {
+    return { kind: 'void', state: null, variant: 0, rotation: 0 };
+  }
+  const feature = getFeature(cell);
+  let state = null;
+  if (feature?.kind === 'door') {
+    state = feature.state;
+  } else if (feature?.kind === 'stairs') {
+    state = feature.params?.verticalMode ?? null;
+  }
+  return {
+    kind: visual.baseToken,
+    state,
+    variant: visual.variant ?? 0,
+    rotation: visual.rotation ?? 0,
+  };
+}
+
+// getTileRotation(cell) → degrees
+// タイル単位の個別回転(world 全体回転とは独立)。
+// v1-0a 時点では常に 0(stairs の個別回転は S7 で実装)。variant/rotation の弱い反映は
+// drawer 内で直接扱う。
+function getTileRotation(cell) {
+  return 0;
+}
+
+// featureOverlay(cell) → descriptor | null
+// Layer 2(タイル上 feature オーバーレイ)。v1 未使用、schema 確立のみ。
+// v1-1 以降で trap / trapdoor のシンボルオーバーレイ用に稼働。
+function featureOverlay(cell) {
+  return null;
+}
+
+// Layer 1: タイル天面スプライトの描画。
+// 呼び出し側で world 回転を適用済みの座標で呼ぶ。
+function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+  const key = cell.key();
+  const isKnown = state.explored.has(key);
+
+  if (!isKnown) {
+    drawHex(ctx, pixel.x, pixel.y, tileRadius - 1, CONFIG.colors.unknown, CONFIG.colors.unknownStroke);
+    return;
+  }
+
+  const isVisible = state.visible.has(key);
+  const isNearAware = state.nearAware.has(key);
+  const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
+
+  const sprite = getTileSprite(cell);
+  const drawer = SPRITE_DRAWERS[sprite.kind] ?? SPRITE_DRAWERS.void;
+
+  // タイル個別回転(v1-0a は常に 0)。S7 で stairs 用に活用。
+  const tileRotDeg = getTileRotation(cell);
+  if (tileRotDeg !== 0) {
+    ctx.save();
+    ctx.translate(pixel.x, pixel.y);
+    ctx.rotate((tileRotDeg * Math.PI) / 180);
+    drawer(ctx, 0, 0, tileRadius, sprite, mode);
+    ctx.restore();
+  } else {
+    drawer(ctx, pixel.x, pixel.y, tileRadius, sprite, mode);
+  }
+}
+
+// Layer 2: タイル上 feature オーバーレイ。v1-0a 時点では何もしない(schema 確立のみ)。
+function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+  const descriptor = featureOverlay(cell);
+  if (!descriptor) return;
+  // v1-1 以降で trap / trapdoor の描画を追加
+}
+
+// Layer 3 の一部として、プレイヤーマーカーを描画。
+// 主画面では world 回転の外で、キャンバス中心に描く(プレイヤーは常に中心に居るため)。
+// 副画面ではプレイヤー座標の pixel 位置に描く。
+function drawPlayerMarker(ctx, cx, cy, tileRadius) {
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(3, tileRadius * 0.45), 0, Math.PI * 2);
+  ctx.fillStyle = CONFIG.colors.player;
+  ctx.strokeStyle = '#c99f2f';
+  ctx.lineWidth = Math.max(1, tileRadius * 0.07);
+  ctx.fill();
+  ctx.stroke();
+}
+
+// ==============================================================================
+
 
 function drawFacingArrow(ctx, centerX, centerY, angleDeg, color, length) {
   const angleRad = (angleDeg * Math.PI) / 180;
@@ -136,112 +380,6 @@ function drawEnemyStateBadge(ctx, centerX, centerY, mode, visibleMode) {
   drawLabel(ctx, centerX, badgeY + height / 2 + 0.5, text, '#f5f7fa', 9);
 }
 
-function getSemanticPalette(sourceCell, feature, canStand, mode) {
-  const palettes = {
-    visible: {
-      room: { fill: CONFIG.colors.floorVisible, stroke: CONFIG.colors.floorVisibleStroke },
-      corridor: { fill: '#25516c', stroke: '#3c6f90' },
-      threshold: { fill: '#436177', stroke: '#6a8ba3' },
-      wall: { fill: CONFIG.colors.wallVisible, stroke: CONFIG.colors.wallVisibleStroke },
-      doorClosed: { fill: '#6a5531', stroke: '#b59554' },
-      doorLocked: { fill: '#7a2f3a', stroke: '#c55763' },
-      doorOpen: { fill: '#2f6a5a', stroke: '#61a890' },
-      stairs: { fill: '#4e4b75', stroke: '#a5a2d8' },
-    },
-    near: {
-      room: { fill: CONFIG.colors.floorNear, stroke: CONFIG.colors.floorNearStroke },
-      corridor: { fill: '#353357', stroke: '#55537b' },
-      threshold: { fill: '#4a5165', stroke: '#727a92' },
-      wall: { fill: CONFIG.colors.wallNear, stroke: CONFIG.colors.wallNearStroke },
-      doorClosed: { fill: '#62513b', stroke: '#8f7756' },
-      doorLocked: { fill: '#6a3138', stroke: '#a04753' },
-      doorOpen: { fill: '#31584e', stroke: '#4d8274' },
-      stairs: { fill: '#403c5e', stroke: '#7b78b0' },
-    },
-    known: {
-      room: { fill: CONFIG.colors.floorKnown, stroke: CONFIG.colors.floorKnownStroke },
-      corridor: { fill: '#1d3040', stroke: '#33495d' },
-      threshold: { fill: '#2a3a47', stroke: '#445563' },
-      wall: { fill: CONFIG.colors.wallKnown, stroke: CONFIG.colors.wallKnownStroke },
-      doorClosed: { fill: '#544633', stroke: '#7b6a50' },
-      doorLocked: { fill: '#522a31', stroke: '#7a4048' },
-      doorOpen: { fill: '#25483f', stroke: '#416a5f' },
-      stairs: { fill: '#322f4a', stroke: '#5b5888' },
-    },
-  };
-
-  const palette = palettes[mode];
-  if (feature?.kind === 'door') {
-    if (feature.state === 'open') return palette.doorOpen;
-    if (feature.state === 'locked') return palette.doorLocked;
-    return palette.doorClosed;
-  }
-  if (feature?.kind === 'stairs') {
-    return palette.stairs;
-  }
-  if (!sourceCell || !canStand) return palette.wall;
-  if (sourceCell.structureKind === 'corridor') return palette.corridor;
-  if (sourceCell.structureKind === 'threshold') return palette.threshold;
-  return palette.room;
-}
-
-function doorLabelFor(feature) {
-  if (feature?.kind !== 'door') return null;
-  if (feature.state === 'open') return null;
-  if (feature.state === 'locked') return 'L';
-  return 'D';
-}
-
-function stairsLabelFor(feature) {
-  if (feature?.kind !== 'stairs') return null;
-  return feature.params?.verticalMode === 'up' ? '↑' : '↓';
-}
-
-function getCellPaint(cell, state) {
-  const key = cell.key();
-  const isVisible = state.visible.has(key);
-  const isNearAware = state.nearAware.has(key);
-  const isKnown = state.explored.has(key);
-  const canStand = canStandAt(cell);
-  const sourceCell = getSourceCellAt(cell);
-  const feature = getFeature(cell);
-
-  if (!isKnown) {
-    return { fill: CONFIG.colors.unknown, stroke: CONFIG.colors.unknownStroke, label: null, labelColor: CONFIG.colors.muted };
-  }
-
-  const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
-  const palette = getSemanticPalette(sourceCell, feature, canStand, mode);
-  // 階段ラベルは known/near でも出す(一度見たら記憶)、door ラベルは visible のみ。
-  const stairsLabel = stairsLabelFor(feature);
-  const doorLabel = isVisible ? doorLabelFor(feature) : null;
-  const label = stairsLabel ?? doorLabel;
-  const labelColor = mode === 'visible' ? CONFIG.colors.text : CONFIG.colors.muted;
-  return {
-    fill: palette.fill,
-    stroke: palette.stroke,
-    label,
-    labelColor,
-  };
-}
-
-function drawCellBase(ctx, cell, drawHexCoord, tileRadius, originX, originY, labelSize, state) {
-  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
-  const paint = getCellPaint(cell, state);
-  let fill = paint.fill;
-  let stroke = paint.stroke;
-
-  if (cell.equals(state.playerPos)) {
-    fill = CONFIG.colors.player;
-    stroke = '#c99f2f';
-  }
-
-  drawHex(ctx, pixel.x, pixel.y, tileRadius - 1, fill, stroke);
-  if (paint.label) {
-    drawLabel(ctx, pixel.x, pixel.y - 5, paint.label, paint.labelColor, labelSize);
-  }
-}
-
 function drawEntityOverlay(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
   const enemy = state.enemies.find((e) => e.pos.equals(cell));
   if (!enemy) {
@@ -340,33 +478,50 @@ export function renderMain(state) {
   const originX = width / 2;
   const originY = height / 2;
   const rotationDeg = -90 - HEADING_ANGLES_DEG[state.previewFacing];
+  const tileRadius = CONFIG.main.tileRadius;
   const cells = state.allWorldCells.filter((cell) => hexDistance(cell, state.playerPos) <= CONFIG.main.localRadius);
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = CONFIG.colors.background;
   ctx.fillRect(0, 0, width, height);
 
+  // world 回転をかけて Layer 1/2/3 を描画(プレイヤー基準のヘディングアップ)
   ctx.save();
   ctx.translate(originX, originY);
   ctx.rotate((rotationDeg * Math.PI) / 180);
   ctx.translate(-originX, -originY);
 
+  // Layer 1: タイル天面スプライト
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
-    drawCellBase(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, 10, state);
+    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
   }
 
+  // stairs の通過辺強調(v1-0a では Layer 1 の補助。S7 で階段回転が動いたら再検討)
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
-    drawStairsEdges(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
+    drawStairsEdges(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
   }
 
+  // Layer 2: タイル上 feature オーバーレイ(v1 未使用、schema 確立のみ)
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
-    drawEntityOverlay(ctx, cell, drawHexCoord, CONFIG.main.tileRadius, originX, originY, state);
+    drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
+  }
+
+  // Layer 3: 敵
+  for (const cell of cells) {
+    const drawHexCoord = cell.subtract(state.playerPos);
+    drawEntityOverlay(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
   }
 
   ctx.restore();
+
+  // Layer 3 続き: プレイヤーマーカー。主画面ではプレイヤーは常にキャンバス中心、
+  // world 回転の影響を受けずに常に正面向き。
+  drawPlayerMarker(ctx, originX, originY, tileRadius);
+
+  // UI overlay: 向き矢印(preview/committed)、中央ラベル
   drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.preview, 46);
   drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.committed, 28);
   drawLabel(ctx, originX, originY + 58, '主画面中央 = プレイヤー位置', CONFIG.colors.muted, 12);
@@ -420,22 +575,32 @@ export function renderSub(state) {
   ctx.fillStyle = CONFIG.colors.background;
   ctx.fillRect(0, 0, width, height);
 
+  // Layer 1
   for (const cell of state.allWorldCells) {
-    drawCellBase(ctx, cell, cell, tileRadius, originX, originY, 8, state);
+    drawCellLayer1(ctx, cell, cell, tileRadius, originX, originY, state);
   }
 
+  // stairs edges
   for (const cell of state.allWorldCells) {
     drawStairsEdges(ctx, cell, cell, tileRadius, originX, originY, state);
   }
 
+  // Layer 2(v1 未使用)
+  for (const cell of state.allWorldCells) {
+    drawCellLayer2(ctx, cell, cell, tileRadius, originX, originY, state);
+  }
+
+  // Layer 3: 敵
   for (const cell of state.allWorldCells) {
     drawEntityOverlay(ctx, cell, cell, tileRadius, originX, originY, state);
   }
 
-  // v1-0a: worldRadius 境界を描画。タイル・階段辺・主体よりも上のレイヤ。
+  // worldRadius 境界(Layer 3 の後、UI overlay 前)
   drawWorldBoundary(ctx, tileRadius, originX, originY, state.config.worldRadius);
 
+  // Layer 3 続き: プレイヤーマーカー + 向き矢印 + ラベル
   const playerPixel = hexToPixel(state.playerPos, tileRadius, originX, originY);
+  drawPlayerMarker(ctx, playerPixel.x, playerPixel.y, tileRadius);
   drawFacingArrow(ctx, playerPixel.x, playerPixel.y, HEADING_ANGLES_DEG[state.committedFacing], CONFIG.colors.committed, tileRadius * 2.2);
   drawFacingArrow(ctx, playerPixel.x, playerPixel.y, HEADING_ANGLES_DEG[state.previewFacing], CONFIG.colors.preview, tileRadius * 1.4);
   drawLabel(ctx, playerPixel.x, playerPixel.y + tileRadius * 2.3, 'player', CONFIG.colors.muted, Math.min(11, tileRadius + 3));

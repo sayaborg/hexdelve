@@ -56,11 +56,25 @@ function buildBaseToken(sourceCell) {
   return 'wall';
 }
 
+// v1-0a(NEXT_STEPS §2.1): (q, r) ベースの決定的 hash。
+// 同じ座標は常に同じ値を返す(seed 非依存、map 生成の再実行で値が動かない)。
+// variant(4 種)/ rotation(6 方向)の派生値算出に使用。
+function hashQR(q, r, salt) {
+  let h = (q * 73856093) ^ (r * 19349663) ^ salt;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
 function buildVisualCell(sourceCell) {
   return {
     baseToken: buildBaseToken(sourceCell),
     structureKind: sourceCell.structureKind ?? null,
     feature: sourceCell.feature ?? null,
+    // v1-0a: タイル描画バリエーション(4 種)× 回転(6 方向)の派生値。
+    //   - source 依存、feature.state 非依存(描画側で state を合成)
+    //   - programmatic 描画では弱く反映(論点 B 合意)、v1-0b の PNG 差し替えで本格稼働
+    variant: hashQR(sourceCell.q, sourceCell.r, 0x9e3779b9) & 3,
+    rotation: hashQR(sourceCell.q, sourceCell.r, 0x85ebca6b) % 6,
   };
 }
 
