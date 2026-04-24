@@ -47,60 +47,64 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 // v1-0b で drawer を PNG 描画に差し替え予定。
 // ==============================================================================
 
-// タイル色のバリアント補正(輝度微調整、±5% 以内)。
+// タイル色のバリアント補正(輝度調整)。
+// v1-0a 初回は ±5% で控えめにしたが、実機で見えなさすぎたため ±15% に強化。
+// v1-0b の PNG 差し替えで本格的なバリアント表現になるため、それまでの暫定値。
 function shiftColorByVariant(hexColor, variant) {
   const r = parseInt(hexColor.slice(1, 3), 16);
   const g = parseInt(hexColor.slice(3, 5), 16);
   const b = parseInt(hexColor.slice(5, 7), 16);
-  const factor = [0.95, 0.98, 1.02, 1.05][variant] ?? 1;
+  const factor = [0.85, 0.93, 1.08, 1.18][variant] ?? 1;
   const cr = Math.max(0, Math.min(255, Math.round(r * factor)));
   const cg = Math.max(0, Math.min(255, Math.round(g * factor)));
   const cb = Math.max(0, Math.min(255, Math.round(b * factor)));
   return `rgb(${cr},${cg},${cb})`;
 }
 
-// variant/rotation の programmatic 表現(弱め):タイル中心から rotation 方向に小ドット 1 個。
-// tileRadius が小さすぎる場合(副画面)は省略。
+// variant/rotation の programmatic 表現:rotation 方向に目印ドット 1 個。
+// v1-0a 初回は tileRadius*0.08 で見えなかったため tileRadius*0.16 に拡大。
+// v1-0b の PNG 差し替えで廃止予定(PNG 自体にバリアント模様が入るため)。
 function drawVariantDot(ctx, cx, cy, tileRadius, rotation, color) {
   if (tileRadius < 6) return;
   const angleDeg = HEADING_ANGLES_DEG[rotation];
   const angleRad = (angleDeg * Math.PI) / 180;
-  const rr = tileRadius * 0.45;
+  const rr = tileRadius * 0.42;
   const x = cx + Math.cos(angleRad) * rr;
   const y = cy + Math.sin(angleRad) * rr;
   ctx.beginPath();
-  ctx.arc(x, y, Math.max(1, tileRadius * 0.08), 0, Math.PI * 2);
+  ctx.arc(x, y, Math.max(2, tileRadius * 0.16), 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
 }
 
 // 状態色(visible / near / known の 3 モード × kind × 属性)。v0 の getSemanticPalette を移植。
+// dot 色は tile fill から視認できるよう、各段階で明るめに設定(v1-0a 実機確認調整後)。
 const SPRITE_PALETTES = {
   visible: {
-    room:       { fill: CONFIG.colors.floorVisible,  stroke: CONFIG.colors.floorVisibleStroke, dot: '#3d5f78' },
-    corridor:   { fill: '#25516c',                   stroke: '#3c6f90',                        dot: '#4b7d9e' },
-    threshold:  { fill: '#436177',                   stroke: '#6a8ba3',                        dot: '#7aa1b8' },
-    wall:       { fill: CONFIG.colors.wallVisible,   stroke: CONFIG.colors.wallVisibleStroke,  dot: '#5e7a8d' },
+    room:       { fill: CONFIG.colors.floorVisible,  stroke: CONFIG.colors.floorVisibleStroke, dot: '#6a9bbb' },
+    corridor:   { fill: '#25516c',                   stroke: '#3c6f90',                        dot: '#78b5d8' },
+    threshold:  { fill: '#436177',                   stroke: '#6a8ba3',                        dot: '#9cc6dc' },
+    wall:       { fill: CONFIG.colors.wallVisible,   stroke: CONFIG.colors.wallVisibleStroke,  dot: '#8eb3c8' },
     doorClosed: { fill: '#6a5531',                   stroke: '#b59554' },
     doorLocked: { fill: '#7a2f3a',                   stroke: '#c55763' },
     doorOpen:   { fill: '#2f6a5a',                   stroke: '#61a890' },
     stairs:     { fill: '#4e4b75',                   stroke: '#a5a2d8' },
   },
   near: {
-    room:       { fill: CONFIG.colors.floorNear,     stroke: CONFIG.colors.floorNearStroke,    dot: '#403d5e' },
-    corridor:   { fill: '#353357',                   stroke: '#55537b',                        dot: '#4d4b75' },
-    threshold:  { fill: '#4a5165',                   stroke: '#727a92',                        dot: '#656c82' },
-    wall:       { fill: CONFIG.colors.wallNear,      stroke: CONFIG.colors.wallNearStroke,     dot: '#625a78' },
+    room:       { fill: CONFIG.colors.floorNear,     stroke: CONFIG.colors.floorNearStroke,    dot: '#716c9b' },
+    corridor:   { fill: '#353357',                   stroke: '#55537b',                        dot: '#7e7ba9' },
+    threshold:  { fill: '#4a5165',                   stroke: '#727a92',                        dot: '#99a2c2' },
+    wall:       { fill: CONFIG.colors.wallNear,      stroke: CONFIG.colors.wallNearStroke,     dot: '#8e85a9' },
     doorClosed: { fill: '#62513b',                   stroke: '#8f7756' },
     doorLocked: { fill: '#6a3138',                   stroke: '#a04753' },
     doorOpen:   { fill: '#31584e',                   stroke: '#4d8274' },
     stairs:     { fill: '#403c5e',                   stroke: '#7b78b0' },
   },
   known: {
-    room:       { fill: CONFIG.colors.floorKnown,    stroke: CONFIG.colors.floorKnownStroke,   dot: '#283544' },
-    corridor:   { fill: '#1d3040',                   stroke: '#33495d',                        dot: '#2a4356' },
-    threshold:  { fill: '#2a3a47',                   stroke: '#445563',                        dot: '#3b4c5a' },
-    wall:       { fill: CONFIG.colors.wallKnown,     stroke: CONFIG.colors.wallKnownStroke,    dot: '#394754' },
+    room:       { fill: CONFIG.colors.floorKnown,    stroke: CONFIG.colors.floorKnownStroke,   dot: '#4a637c' },
+    corridor:   { fill: '#1d3040',                   stroke: '#33495d',                        dot: '#4f7591' },
+    threshold:  { fill: '#2a3a47',                   stroke: '#445563',                        dot: '#5e7488' },
+    wall:       { fill: CONFIG.colors.wallKnown,     stroke: CONFIG.colors.wallKnownStroke,    dot: '#5b7084' },
     doorClosed: { fill: '#544633',                   stroke: '#7b6a50' },
     doorLocked: { fill: '#522a31',                   stroke: '#7a4048' },
     doorOpen:   { fill: '#25483f',                   stroke: '#416a5f' },
