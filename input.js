@@ -163,9 +163,19 @@ export function bindMainCanvasGestures(handlers) {
   // iOS Chrome 含む全モバイルブラウザで確実に動かすため pointer events は使わない。
   // touchstart では preventDefault しない(iOS で後続イベント発火を阻害する可能性回避)。
   // touchmove は { passive: false } + preventDefault でブラウザのスクロールを抑制。
+  // touchend は { passive: false } + preventDefault でゴースト mouse イベントを抑制。
+  //   (iOS は touchend 後に自動で mousedown/mouseup/click を発火する。これを止めないと
+  //    タップ 1 回で touch + mouse の 2 回が処理され「連続操作」になる)。
+
+  // touch 直後の mouse イベントを完全に無視する保険フラグ
+  // (preventDefault が効かない場合のフォールバック)。
+  let touchRecentTimestamp = 0;
+  const TOUCH_MOUSE_GUARD_MS = 500;
+  const isMouseGhost = () => (Date.now() - touchRecentTimestamp) < TOUCH_MOUSE_GUARD_MS;
 
   canvas.addEventListener('touchstart', (event) => {
     if (event.touches.length !== 1) return;  // マルチタッチは無視(ピンチズーム等)
+    touchRecentTimestamp = Date.now();
     const t = event.touches[0];
     onStart(t.clientX, t.clientY);
   }, { passive: true });
@@ -173,38 +183,45 @@ export function bindMainCanvasGestures(handlers) {
   canvas.addEventListener('touchmove', (event) => {
     if (event.touches.length !== 1) return;
     event.preventDefault();
+    touchRecentTimestamp = Date.now();
     const t = event.touches[0];
     onMove(t.clientX, t.clientY);
   }, { passive: false });
 
   canvas.addEventListener('touchend', (event) => {
+    event.preventDefault();
+    touchRecentTimestamp = Date.now();
     const t = event.changedTouches[0];
     if (!t) return;
     onEnd(t.clientX, t.clientY);
-  });
+  }, { passive: false });
 
   canvas.addEventListener('touchcancel', (event) => {
+    touchRecentTimestamp = Date.now();
     const t = event.changedTouches[0];
     onEnd(t?.clientX ?? 0, t?.clientY ?? 0, { cancelled: true });
   });
 
   // ------ Mouse events(PC)------
-  // モバイルブラウザは touch 発火後に mousedown を発火しないのが一般的だが、
-  // 念のため isPressed で二重起動を防ぐ(touch 中は mouse 側が無視される)。
+  // モバイルブラウザは touch 直後にゴースト mouse イベントを発火することがあるため、
+  // isMouseGhost() で touch 直後 500ms 以内の mouse は完全無視する。
 
   canvas.addEventListener('mousedown', (event) => {
     if (event.button !== 0) return;
     if (isPressed) return;
+    if (isMouseGhost()) return;
     onStart(event.clientX, event.clientY);
   });
 
   canvas.addEventListener('mousemove', (event) => {
     if (!isPressed) return;
+    if (isMouseGhost()) return;
     onMove(event.clientX, event.clientY);
   });
 
   canvas.addEventListener('mouseup', (event) => {
     if (!isPressed) return;
+    if (isMouseGhost()) return;
     onEnd(event.clientX, event.clientY);
   });
 

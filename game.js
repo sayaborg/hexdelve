@@ -509,9 +509,12 @@ function transitionFloor() {
   state.currentSeed = newSeed;
   state.currentMapName = buildGeneratedMapLabel(state.currentMapId, newSeed);
 
-  // プレイヤー再配置(generator が返した playerStart に従う)
+  // プレイヤー再配置(位置は generator が返した playerStart、facing は遷移前の値を保持)
   state.playerPos = new Hex(newMap.playerStart.q, newMap.playerStart.r);
-  state.committedFacing = newMap.playerStart.facing ?? oldExitHeading;
+  // committedFacing は遷移前の値をそのまま保持(SPEC §9.9、フェーズ 37 改訂)。
+  //   階段通過で顔の向きは変わらない = 後退で階段を通過した場合も facing は後ろ向きのまま。
+  //   generator.playerStart.facing は初期フロア(新規ラン開始)用の値なので、遷移時は無視する。
+  // previewFacing は committedFacing と同値にリセット(未確定仮向きをクリア)。
   state.previewFacing = state.committedFacing;
 
   // 状態リセット(HP / maxHP / turn は引き継ぎ)

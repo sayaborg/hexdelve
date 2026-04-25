@@ -71,6 +71,25 @@ canvas {
 .canvas-frame {
   position: relative;
 }
+
+/* v1-0a: 主画面のタップ目安(6 方向矢印 + 中心待機マーカー)。
+   canvas と同寸で重ね、pointer-events: none で透過(タッチは canvas に届く)。
+   うっすら常時表示。debug overlay の有無に関係なく表示。 */
+.hex-direction-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.18;
+}
+.hex-direction-overlay .hex-overlay-arrow polygon {
+  fill: var(--text);
+}
+.hex-direction-overlay .hex-overlay-wait {
+  fill: var(--text);
+}
 /* v1-0a: 主画面 canvas を直接タップしてゾーン判定する。
    タップ中のテキスト選択 / ハイライトを抑制。 */
 #mainCanvas {
@@ -212,9 +231,36 @@ button:hover { background: #253242; }
   font-size: 12px;
   color: var(--muted);
 }
+/* ==============================================================================
+   v1-0a(S10): レスポンシブ精査
+   ============================================================================== */
 @media (max-width: 860px) {
+  /* 2 カラムを 1 カラムに */
   .views, .footer-grid { grid-template-columns: 1fr; }
+
+  /* モバイルでは主画面タップ + スワイプで操作するため、大きな下段 hex-pad は不要。
+     回頭ボタンだけは残す(スワイプが使いづらい場合の代替手段として)。 */
+  .hex-pad-wrap .small,
+  .hex-pad,
+  .control-keys {
+    display: none;
+  }
+
+  /* モバイルで header の説明文は縮めて場所を取らない */
+  .header h1 { font-size: 15px; margin-bottom: 4px; }
+  .header p {
+    font-size: 11px;
+    line-height: 1.45;
+  }
+
+  /* panel の内側余白を少し詰めて主画面の表示面積を広げる */
+  .panel { padding: 10px; }
+
+  /* 操作ヒントと回頭ボタン周辺はコンパクトに */
+  .hex-pad-wrap { padding: 10px; }
+  .control-note { font-size: 11px; line-height: 1.5; }
 }
+/* ============================================================================== */
 
 .map-tools {
   display: grid;
