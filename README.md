@@ -1,68 +1,65 @@
-# HEX Roguelike Split Prototype
+# v1-0b.1 完全パッケージ
 
-ブラウザで動く、HEX版NetHack風ローグライクの試作プロトタイプ。
+PNG スプライトインフラ層実装。**ソース一式を含む drop-in 置き換え可能なパッケージ**。
 
-## 起動方法
+## 適用方法
 
-ローカルに展開後、このフォルダで簡易サーバを立てる。
+このディレクトリの内容を repo のルート直下に配置すれば、そのままブラウザで `index.html` を開いて動作する(static file serve のみで OK、ビルド不要)。
 
-```bash
-python -m http.server 8000
-```
+`assets/sprites/` 内に PNG が無いため programmatic フォールバックで描画されるが、機能リグレッションなしで v1-0a 同等の見た目を維持する。アセット投入は v1-0b.2 で実施。
 
-環境によっては `python3 -m http.server 8000` でもよい。
+ドキュメント側(CHANGELOG.md / STATUS.md / NEXT_STEPS.md)の更新分は `docs/snippets/` 内のスニペットを既存ドキュメントに手動マージすること。
 
-その後、ブラウザで以下を開く。
+## ファイル構成
 
-```text
-http://localhost:8000/
-```
+### ソースコード(ルート直下)
 
-## 現在の実装
+#### v1-0b.1 で改修したファイル(2)
+- `render.js` — drawer 2 系統に分離、shadow pass、mode filter 追加
+- `game.js` — bootstrap で `preloadAllSprites()` 非同期呼び出し追加
 
-- q / r 軸を明示した HEX 座標
-- 6方向平行移動
-- 回頭はゼロターン
-- 移動時 / 待機時のみ視界更新
-- 前方 120 度 FOV + LOS
-- LOS は 3 本線サンプリング
-- 隣接 6 マスの近接知覚
-- 敵も同じ知覚系を使用
-- 敵AIは巡回 / 追跡 / 見失い地点確認 / 帰投
-- 敵の向き / 状態表示
-- 固定テストマップ切替
-- 生成Caveマップ切替
-- Reset Map による即時再開
+#### v1-0b.1 で新規追加したファイル(1)
+- `asset-loader.js` — `SPRITE_MANIFEST` + プリロード + cache + getter
 
-## マップ切替
+#### v1-0a から変更なし(13)
+- `config.js`, `enemy-ai.js`, `hex.js`, `input.js`, `map.js`, `map-compile.js`, `map-source.js`, `perception.js`, `rng.js`
+- `map-family-cave.js`, `map-family-cave-natural.js`, `map-family-rooms-classic.js`
+- `index.html`, `style.css`
 
-右パネルの `Map` セレクトから以下を切り替え可能。
+### アセットディレクトリ(`assets/sprites/`)
 
-- Generated cave (seed固定)
-- Corner Fear
-- Doorway Hall
-- Loop Recontact
+- `README.md` — 命名規則・PNG 仕様・kind 別ガイド
+- `.gitkeep` — 空ディレクトリの commit 用
+- (PNG ファイルは v1-0b.2 で投入予定)
 
-Generated cave は、半径40の世界に対して
-「連結掘削 → 控えめなふくらみ追加 → 軽いループ追加」で作る最初の自動生成実装である。
-固定マップは引き続き「怖さ」「索敵」「再接触」の検証用に残している。
+### 差分ファイル(`diffs/`、レビュー用)
 
-## 次段階の候補
+- `render.js.diff` — unified diff(v1-0a → v1-0b.1)、220 行
+- `game.js.diff` — unified diff、16 行
 
-- 生成パラメータUI（seed / floorRate / loopiness）
-- 部屋寄り生成ファミリの追加
-- ゴール / 目的物の配置
-- 行動ログの整理
-- マップごとのクリア条件と評価ログ
+### ドキュメント追記スニペット(`docs/snippets/`、手動マージ用)
 
-- 行動解決は 攻撃 → 移動 → 知覚更新。
-- 同一空きマスへの同時進入は wt の低い側が勝ち、同wtなら全員足踏み。
+- `CHANGELOG_phase49_snippet.md` — フェーズ 49 の完全記述
+- `STATUS_snippet.md` — 進行状況・次の作業
+- `NEXT_STEPS_snippet.md` — v1-0b.2 / v1-0b.3 の計画
 
-## rooms_classic（試作第2段階）
+## 動作確認(本パッケージ作成時に実施済)
 
-- `generated_rooms_classic` を追加
-- 正六角の room 群を配置
-- room center ベースの MST + extra loop を構築
-- perimeter から最寄り door pair を debug 計算
-- まだ corridor 掘削は未実装
-- 副画面に room graph / start room / selected door pair を overlay 表示
+- 全 15 JS ファイル `node --check` で syntax OK
+- 全 import-export 整合性チェック OK(asset-loader.js → render.js / game.js の新規 import 3 つすべて解決)
+- shadow trapezoid 幾何検証済(面積比 0.208、4 頂点が hex 内に正確に内接)
+
+## 主な設計判断(v1-0b.1)
+
+| # | 項目 | 判断 |
+|---|------|------|
+| ① | アセット方針 | C(AI 生成 + repo commit) |
+| ② | 解像度 | 128 × 111 px、size=64、flat-top hex、主画面のみ PNG |
+| ③ | 影方向 | world-south 固定、PNG には焼き込まず別パス |
+| ④ | mode 表現 | visible のみ PNG、near/known は `ctx.filter` |
+| ⑤ | z=+h 判定 | `canStandAtHere=false` または `closed`/`locked` ドア |
+
+## 次の作業
+
+- **v1-0b.2**: AI 生成スプライト 21 枚を `assets/sprites/` に配置、kind 順に投入
+- **v1-0b.3**: shadow alpha / 形状の最終調整、`ctx.filter` 数値チューニング、HiDPI 検証、必要なら offscreen canvas キャッシュ実装

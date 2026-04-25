@@ -2,11 +2,14 @@ import { CONFIG } from './config.js';
 import {
   HEADING_ANGLES_DEG,
   HEADING_LABELS,
+  getNeighbor,
   hexDistance,
   hexToPixel,
+  isInsideWorld,
   polygonCorners,
 } from './hex.js';
-import { getFeature, getVisualCellAt } from './map.js';
+import { getFeature, getRuntimeCell, getVisualCellAt } from './map.js';
+import { getSpriteAsset } from './asset-loader.js';
 
 function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
   const corners = polygonCorners(centerX, centerY, size);
@@ -33,6 +36,8 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 
 // ==============================================================================
 // v1-0a(NEXT_STEPS §2.1): タイル天面スプライトシステム(Layer 1)
+// v1-0b.1(CHANGELOG フェーズ 49): main は PNG 経路 + programmatic フォールバック、
+//                                   sub は完全 programmatic に分離。
 // ==============================================================================
 //
 // 構造(論点 C 合意 2026-04-24):
@@ -42,10 +47,26 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 //     variant:  0..3(visualsByKey に焼き込み済み、座標決定的)
 //     rotation: 0..5(同上)
 //
-// drawer 辞書 SPRITE_DRAWERS に kind → 描画関数をマッピング。
-// v1-0a は programmatic 描画(論点 B 合意:弱く表現)。
-// v1-0b で drawer を PNG 描画に差し替え予定。
+// drawer 辞書は v1-0b.1 で 2 系統に分離:
+//   SPRITE_DRAWERS_PROG: 全 programmatic(副画面 + PNG 未配置時のフォールバック)
+//   SPRITE_DRAWERS_PNG:  主画面用、PNG が無ければ Prog にフォールバック
+//
+// mode 表現:
+//   - PROG drawer: SPRITE_PALETTES[mode] でパレット切替(従来通り)
+//   - PNG drawer:  visible は PNG そのまま、near/known は ctx.filter で post-effect
 // ==============================================================================
+
+// PNG 描画スケール:アセットは 128×111 px(頂点間 128 = 2×size、辺間 111 ≈ √3×size、size=64)。
+// drawImage 時の dst サイズは tileRadius を size とみなして比例縮小する。
+const SQRT3 = Math.sqrt(3);
+
+// near/known mode の post-effect。PNG drawer のみで適用。
+// 数値は v1-0b.3 で実機チューニング予定。
+const MODE_FILTERS = {
+  visible: null,
+  near: 'blur(1.5px) brightness(0.92) saturate(0.85)',
+  known: 'brightness(0.42) saturate(0.55)',
+};
 
 // タイル色のバリアント補正(輝度調整)。
 // v1-0a 初回は ±5% で控えめにしたが、実機で見えなさすぎたため ±15% に強化。
@@ -112,28 +133,28 @@ const SPRITE_PALETTES = {
   },
 };
 
-function drawRoomSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawRoomSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const palette = SPRITE_PALETTES[mode].room;
   const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
   drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
   drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
 }
 
-function drawCorridorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawCorridorSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const palette = SPRITE_PALETTES[mode].corridor;
   const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
   drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
   drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
 }
 
-function drawThresholdSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawThresholdSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const palette = SPRITE_PALETTES[mode].threshold;
   const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
   drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
   drawVariantDot(ctx, cx, cy, tileRadius, spriteKey.rotation, palette.dot);
 }
 
-function drawWallSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawWallSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const palette = SPRITE_PALETTES[mode].wall;
   const fill = shiftColorByVariant(palette.fill, spriteKey.variant);
   drawHex(ctx, cx, cy, tileRadius - 1, fill, palette.stroke);
@@ -232,7 +253,7 @@ function drawHexPillarSide(ctx, cx, cy, size, lift, fillColor, strokeColor) {
 //   - locked : closed と同じ柱 + 中心に鍵穴アイコン
 // 影の方向は世界座標の南固定(world 回転の内側で描画、world と一緒に回る=
 //  「太陽が南中」表現)。世界が回っても影は常に世界の南側に落ちる。
-function drawDoorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawDoorSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   // open: フラット塗りのみ(床同化)
   if (spriteKey.state === 'open') {
     const palette = SPRITE_PALETTES[mode].doorOpen;
@@ -263,7 +284,7 @@ function drawDoorSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
   }
 }
 
-function drawStairsSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawStairsSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   const palette = SPRITE_PALETTES[mode].stairs;
   drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
   if (tileRadius >= 8) {
@@ -273,20 +294,91 @@ function drawStairsSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
   }
 }
 
-function drawVoidSprite(ctx, cx, cy, tileRadius, spriteKey, mode) {
+function drawVoidSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   // 世界外側の暗タイル。wall パレットを使用。
   const palette = SPRITE_PALETTES[mode].wall;
   drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
 }
 
-const SPRITE_DRAWERS = {
-  room:      drawRoomSprite,
-  corridor:  drawCorridorSprite,
-  threshold: drawThresholdSprite,
-  wall:      drawWallSprite,
-  door:      drawDoorSprite,
-  stairs:    drawStairsSprite,
-  void:      drawVoidSprite,
+const SPRITE_DRAWERS_PROG = {
+  room:      drawRoomSpriteProg,
+  corridor:  drawCorridorSpriteProg,
+  threshold: drawThresholdSpriteProg,
+  wall:      drawWallSpriteProg,
+  door:      drawDoorSpriteProg,
+  stairs:    drawStairsSpriteProg,
+  void:      drawVoidSpriteProg,
+};
+
+// ==============================================================================
+// v1-0b.1: PNG drawer 群(主画面用)
+// ==============================================================================
+//
+// アセットがあれば PNG を drawImage、無ければ programmatic にフォールバック。
+// near/known mode は ctx.filter で post-effect(blur / brightness / saturate)。
+// ==============================================================================
+
+// PNG を hex タイル位置に描画。アセットは 128×111(size=64)、tileRadius を新 size として
+// 比例縮小して drawImage する。rotation は 60° × index で個別回転。
+// ctx.filter は呼び出し側で save/restore して適用する。
+function drawSpriteImage(ctx, img, cx, cy, tileRadius, rotationIndex) {
+  const dw = tileRadius * 2;
+  const dh = tileRadius * SQRT3;
+
+  if (rotationIndex && rotationIndex !== 0) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((rotationIndex * 60 * Math.PI) / 180);
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+  }
+}
+
+// PNG drawer の共通実装。アセットがあれば PNG、無ければ programmatic にフォールバック。
+// useTileRotation=true(stairs)なら、PNG 自体の個別 rotation は 0 にし、タイル単位回転は
+// drawCellLayer1 側の getTileRotation で適用させる(二重回転防止)。
+function makePngDrawer(kind, getStateForKey, useTileRotation, progDrawer) {
+  return (ctx, cx, cy, tileRadius, spriteKey, mode) => {
+    const state = getStateForKey ? getStateForKey(spriteKey) : null;
+    const variant = spriteKey.variant ?? 0;
+    const asset = getSpriteAsset(kind, state, variant);
+
+    if (!asset) {
+      progDrawer(ctx, cx, cy, tileRadius, spriteKey, mode);
+      return;
+    }
+
+    const filter = MODE_FILTERS[mode];
+    const rotationIndex = useTileRotation ? 0 : (spriteKey.rotation ?? 0);
+
+    if (filter) {
+      ctx.save();
+      ctx.filter = filter;
+      drawSpriteImage(ctx, asset, cx, cy, tileRadius, rotationIndex);
+      ctx.restore();
+    } else {
+      drawSpriteImage(ctx, asset, cx, cy, tileRadius, rotationIndex);
+    }
+  };
+}
+
+const drawRoomSpritePng = makePngDrawer('room', null, false, drawRoomSpriteProg);
+const drawCorridorSpritePng = makePngDrawer('corridor', null, false, drawCorridorSpriteProg);
+const drawThresholdSpritePng = makePngDrawer('threshold', null, false, drawThresholdSpriteProg);
+const drawWallSpritePng = makePngDrawer('wall', null, false, drawWallSpriteProg);
+const drawDoorSpritePng = makePngDrawer('door', (key) => key.state ?? 'closed', false, drawDoorSpriteProg);
+const drawStairsSpritePng = makePngDrawer('stairs', (key) => key.state ?? 'down', true, drawStairsSpriteProg);
+
+const SPRITE_DRAWERS_PNG = {
+  room:      drawRoomSpritePng,
+  corridor:  drawCorridorSpritePng,
+  threshold: drawThresholdSpritePng,
+  wall:      drawWallSpritePng,
+  door:      drawDoorSpritePng,
+  stairs:    drawStairsSpritePng,
+  void:      drawVoidSpriteProg,  // void は PNG 不要、programmatic 維持
 };
 
 // ==============================================================================
@@ -340,7 +432,8 @@ function featureOverlay(cell) {
 
 // Layer 1: タイル天面スプライトの描画。
 // 呼び出し側で world 回転を適用済みの座標で呼ぶ。
-function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state) {
+// v1-0b.1: drawers 引数で drawer set を切り替え(主画面 = PNG 経路、副画面 = Prog)。
+function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, drawers) {
   const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
   const key = cell.key();
   const isKnown = state.explored.has(key);
@@ -355,7 +448,7 @@ function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
   const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
 
   const sprite = getTileSprite(cell);
-  const drawer = SPRITE_DRAWERS[sprite.kind] ?? SPRITE_DRAWERS.void;
+  const drawer = drawers[sprite.kind] ?? drawers.void;
 
   // タイル個別回転(v1-0a は常に 0)。S7 で stairs 用に活用。
   const tileRotDeg = getTileRotation(cell);
@@ -376,6 +469,80 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
   if (!descriptor) return;
   // v1-1 以降で trap / trapdoor の描画を追加
 }
+
+// ==============================================================================
+// v1-0b.1: shadow pass(NEXT_STEPS §2.1、CHANGELOG フェーズ 49)
+// ==============================================================================
+//
+// 「内部環境なので影はない」が物理的に正しいが、立体感のため疑似ドロップシャドウを
+// 落とす。光源は世界座標の南中(world-south 固定、副画面ノースアップ規則と整合)。
+//
+// モデル:
+//   - z=+h タイル(壁ブロック / closed・locked ドア)が、北隣の z=0 タイルに影を落とす
+//   - 影は recipient の南半分の trapezoid 領域(面積 ~5/24 ≈ 1/4.8、alpha で減衰)
+//   - 主画面のみ実行(副画面は構造表示のため shadow pass を持たない)
+//
+// 描画順:
+//   Layer 1(タイル天面) → shadow pass → stairs edges → Layer 2 → Layer 3
+//
+// 拡張点:
+//   getTileHeight(cell) を v1+ で柱・障害物・unstable など追加した時の単一フック点とする。
+// ==============================================================================
+
+function getTileHeight(cell) {
+  const runtime = getRuntimeCell(cell);
+  if (!runtime) return 0;
+  // 壁(blocked support): 物理的に立っている → z=+h
+  if (!runtime.canStandAtHere) return 1;
+  // closed / locked ドア: 柱として立っている → z=+h
+  const feature = runtime.feature;
+  if (feature?.kind === 'door' && (feature.state === 'closed' || feature.state === 'locked')) {
+    return 1;
+  }
+  // open ドア・階段・床は z=0
+  return 0;
+}
+
+// recipient hex の南側 trapezoid を半透明黒で塗る。
+// 上辺は y = +size×√3/4(中心の少し南)、下辺は y = +size×√3/2(南エッジ)。
+// 上辺幅 3×size/2、下辺幅 size、面積比 ~0.208(≈ 1/4.8)。
+// drawHex が size = (tileRadius - 1) を使うため、shadow も同じ size に揃える。
+function drawDropShadow(ctx, cx, cy, tileRadius) {
+  const size = tileRadius - 1;
+  const yTop = cy + size * SQRT3 / 4;
+  const yBottom = cy + size * SQRT3 / 2;
+  ctx.beginPath();
+  ctx.moveTo(cx + size * 3 / 4, yTop);    // top-east(edge 0→1 の中点)
+  ctx.lineTo(cx - size * 3 / 4, yTop);    // top-west(edge 2→3 の中点)
+  ctx.lineTo(cx - size / 2,     yBottom); // SW corner(corner 2)
+  ctx.lineTo(cx + size / 2,     yBottom); // SE corner(corner 1)
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+  ctx.fill();
+}
+
+// shadow pass: 各 recipient タイルについて、その south 隣(heading 3)が z>0 なら影を描く。
+// recipient は z=0、recipient と source は両方とも explored であることが必要。
+// world 回転の内側で呼ばれるため、影方向は「世界南」固定(player heading によらない)。
+function drawShadowPass(ctx, cells, tileRadius, originX, originY, state) {
+  const worldRadius = state.config.worldRadius;
+  for (const cell of cells) {
+    const cellKey = cell.key();
+    if (!state.explored.has(cellKey)) continue;
+    if (getTileHeight(cell) > 0) continue;  // recipient は z=0 のみ
+
+    const south = getNeighbor(cell, 3);
+    if (!isInsideWorld(south, worldRadius)) continue;
+    if (!state.explored.has(south.key())) continue;
+    if (getTileHeight(south) === 0) continue;
+
+    const drawHexCoord = cell.subtract(state.playerPos);
+    const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+    drawDropShadow(ctx, pixel.x, pixel.y, tileRadius);
+  }
+}
+
+// ==============================================================================
 
 // Layer 3 の一部として、プレイヤーマーカーを描画。
 // 主画面では world 回転の外で、キャンバス中心に描く(プレイヤーは常に中心に居るため)。
@@ -609,11 +776,14 @@ export function renderMain(state) {
   ctx.rotate((rotationDeg * Math.PI) / 180);
   ctx.translate(-originX, -originY);
 
-  // Layer 1: タイル天面スプライト
+  // Layer 1: タイル天面スプライト(主画面 = PNG 経路 + Prog フォールバック)
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
-    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
+    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, SPRITE_DRAWERS_PNG);
   }
+
+  // v1-0b.1: Layer 1.5: shadow pass(主画面のみ、world 回転内側 = 影は世界南固定)
+  drawShadowPass(ctx, cells, tileRadius, originX, originY, state);
 
   // stairs の通過辺強調(v1-0a では Layer 1 の補助。S7 で階段回転が動いたら再検討)
   for (const cell of cells) {
@@ -693,9 +863,9 @@ export function renderSub(state) {
   ctx.fillStyle = CONFIG.colors.background;
   ctx.fillRect(0, 0, width, height);
 
-  // Layer 1
+  // Layer 1(副画面は完全 programmatic、shadow pass なし = 構造表示のため)
   for (const cell of state.allWorldCells) {
-    drawCellLayer1(ctx, cell, cell, tileRadius, originX, originY, state);
+    drawCellLayer1(ctx, cell, cell, tileRadius, originX, originY, state, SPRITE_DRAWERS_PROG);
   }
 
   // stairs edges
