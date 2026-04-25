@@ -1,6 +1,7 @@
 import { CONFIG } from './config.js';
 import { EDGE_DIRECTIONS, Hex, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
+import { selectEnemiesWithMinDistanceRelaxation } from './map-spawn.js';
 
 // ---- 幾何ヘルパ ----
 
@@ -79,7 +80,8 @@ function collectRoomFloorCells(cellMap, rooms, reserved) {
 }
 
 function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
-  // 仕様(SPEC §11.3): 3〜5 体、プレイヤー初期位置から hexDistance >= 5。
+  // 仕様(SPEC §11.3): 3〜5 体、プレイヤー初期位置から hexDistance >= 5、
+  // 敵同士 hexDistance >= 6(段階的緩和つき、CHANGELOG フェーズ 49)。
   // wt は watcher の wtRange から乱数で決定、以降個体固定。
   const count = rng.int(3, 5);
   const watcherKind = CONFIG.enemyKinds.watcher;
@@ -94,24 +96,22 @@ function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
     .filter((entry) => entry.dist >= 5)
     .sort((a, b) => b.dist - a.dist);
 
-  const enemies = [];
-  const used = new Set();
-  for (const entry of rng.shuffle(ranked)) {
-    if (enemies.length >= count) break;
-    const key = `${entry.cell.q},${entry.cell.r}`;
-    if (used.has(key)) continue;
-    used.add(key);
-    const facing = chooseFacingToward(new Hex(entry.cell.q, entry.cell.r), startCenter);
-    enemies.push({
-      id: `e${enemies.length + 1}`,
-      kind: 'watcher',
-      q: entry.cell.q,
-      r: entry.cell.r,
-      facing,
-      wt: rng.int(wtMin, wtMax),
-    });
-  }
-  return enemies;
+  // shuffle 結果を緩和ループの全段階で再利用するため、ここで 1 回だけ shuffle する
+  // (SPEC §11.3 の「配置順の決定論」規約)。
+  const orderedCandidates = rng.shuffle(ranked).map((entry) => ({
+    q: entry.cell.q,
+    r: entry.cell.r,
+  }));
+  const chosen = selectEnemiesWithMinDistanceRelaxation(orderedCandidates, count);
+
+  return chosen.map((cell, idx) => ({
+    id: `e${idx + 1}`,
+    kind: 'watcher',
+    q: cell.q,
+    r: cell.r,
+    facing: chooseFacingToward(new Hex(cell.q, cell.r), startCenter),
+    wt: rng.int(wtMin, wtMax),
+  }));
 }
 
 // ---- 階段配置 ----

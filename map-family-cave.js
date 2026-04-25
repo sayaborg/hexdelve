@@ -1,6 +1,7 @@
 import { CONFIG } from './config.js';
 import { Hex, EDGE_DIRECTIONS, cubeRound, hexDistance, isInsideWorld, oppositeHeading } from './hex.js';
 import { createRng } from './rng.js';
+import { selectEnemiesWithMinDistanceRelaxation } from './map-spawn.js';
 
 function tileKey(q, r) {
   return `${q},${r}`;
@@ -225,34 +226,29 @@ function choosePlayerStart(tiles) {
 }
 
 function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
+  // 仕様(SPEC §11.3): 3〜5 体、プレイヤー初期位置から hexDistance >= 5、
+  // 敵同士 hexDistance >= 6(段階的緩和つき、CHANGELOG フェーズ 49)。
   const origin = new Hex(playerStart.q, playerStart.r);
   const floors = collectFloorTiles(tiles).filter((tile) => {
     if (stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r) return false;
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
     // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。
-    // 上限 22 は cave family の過密回避のための family 固有値(仕様の最小要件を満たしつつ
-    // 洞窟の広さに対してちょうどよい密度になるよう調整)。
+    // 上限 22 は cave family の過密回避のための family 固有値(SPEC §11.3)。
     return dist >= 5 && dist <= 22;
   });
-  const shuffled = rng.shuffle(floors);
+  // shuffle 結果を緩和ループの全段階で再利用(SPEC §11.3 の「配置順の決定論」規約)。
+  const orderedCandidates = rng.shuffle(floors).map((tile) => ({ q: tile.q, r: tile.r }));
   const count = rng.int(3, 5);
   const [wtMin, wtMax] = CONFIG.enemyKinds.watcher.wtRange;
-  const enemies = [];
-  for (const tile of shuffled) {
-    if (enemies.length >= count) break;
-    const pos = new Hex(tile.q, tile.r);
-    const tooClose = enemies.some((enemy) => hexDistance(pos, new Hex(enemy.q, enemy.r)) < 6);
-    if (tooClose) continue;
-    enemies.push({
-      id: `e${enemies.length + 1}`,
-      kind: 'watcher',
-      q: tile.q,
-      r: tile.r,
-      facing: rng.int(0, 5),
-      wt: rng.int(wtMin, wtMax),
-    });
-  }
-  return enemies;
+  const chosen = selectEnemiesWithMinDistanceRelaxation(orderedCandidates, count);
+  return chosen.map((cell, idx) => ({
+    id: `e${idx + 1}`,
+    kind: 'watcher',
+    q: cell.q,
+    r: cell.r,
+    facing: rng.int(0, 5),
+    wt: rng.int(wtMin, wtMax),
+  }));
 }
 
 function buildSourceCells(tiles, radius, stairsInfo) {
@@ -341,7 +337,13 @@ function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
       if (n && n.terrain === 'floor') walkableHeadings.push(h);
     }
     if (walkableHeadings.length === 0) continue;
-    const enterHeading = rng.pick(walkableHeadings);
+    // SPEC §4.3:enterHeading は「主体が階段に入る時の進行方向ベクトル」。
+    // walkableHeadings[h] は「階段から見て床がある方向」=「プレイヤーが階段から出る方向」。
+    // プレイヤーがその床から階段に入る時の移動方向はその opposite。
+    // CHANGELOG フェーズ 50:v0 期から残存していた逆向き bug を修正
+    //   (旧コード: enterHeading = floorSide で、初期階段に到達不能なフロアが生成されていた)。
+    const floorSide = rng.pick(walkableHeadings);
+    const enterHeading = oppositeHeading(floorSide);
     return {
       q: tile.q,
       r: tile.r,
