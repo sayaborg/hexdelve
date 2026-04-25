@@ -80,7 +80,9 @@ function angleFromCenter(clientX, clientY, cx, cy) {
 }
 
 export function bindMainCanvasGestures(handlers) {
-  const canvas = document.getElementById('mainCanvas');
+  // v1-0b.1.1(フェーズ 53): 主画面は BG/FG の 2 段キャンバス構造。
+  // FG が前面で touch を受ける(BG は pointer-events: none)。
+  const canvas = document.getElementById('mainCanvasFG');
   if (!canvas) return;
 
   let isPressed = false;

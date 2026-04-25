@@ -59,13 +59,32 @@ canvas {
    ジェスチャ(スクロール、ズーム等)を完全抑制。JS 側でも canvas.style.touchAction = 'none'
    を設定するが、CSS で宣言しておくことで JS 実行前のタッチも抑制される。
    cursor: pointer + tabindex="0"(HTML) は iOS Safari/Chrome で canvas を interactive
-   要素として認識させる定番ハック。これがないと iOS でタッチイベントが発火しないことがある。 */
-#mainCanvas {
+   要素として認識させる定番ハック。これがないと iOS でタッチイベントが発火しないことがある。
+   v1-0b.1.1(フェーズ 53):主画面は BG/FG の 2 段キャンバス構造。
+   FG が前面で touch を受ける、BG は背面で blur 経由で「視界外のぼやけ」を表現。 */
+
+#mainCanvasFG {
   touch-action: none;
   cursor: pointer;
   outline: none;
+  position: relative;
+  z-index: 1;
+  display: block;
 }
-#mainCanvas:focus { outline: none; }
+#mainCanvasFG:focus { outline: none; }
+
+#mainCanvasBG {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  /* v1-0b.1.1:視界外(explored だが現在 FOV 外)タイルを「ぼやけて見える」状態で表現。
+     iOS Safari < 18 は ctx.filter(canvas 2D)未対応のため、CSS filter で実現する
+     (CSS filter は iOS 9.0+ で動作)。blur 量は実機で要チューニング(v1-0b.3 課題)。 */
+  filter: blur(2px);
+}
 
 /* v1-0a(NEXT_STEPS §2.1): 主画面オーバーレイ用フレーム */
 .canvas-frame {
@@ -91,8 +110,9 @@ canvas {
   fill: var(--text);
 }
 /* v1-0a: 主画面 canvas を直接タップしてゾーン判定する。
-   タップ中のテキスト選択 / ハイライトを抑制。 */
-#mainCanvas {
+   タップ中のテキスト選択 / ハイライトを抑制。
+   v1-0b.1.1: FG canvas が touch を受けるので #mainCanvasFG に対象変更。 */
+#mainCanvasFG {
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;

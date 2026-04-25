@@ -38,6 +38,11 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 // v1-0a(NEXT_STEPS §2.1): タイル天面スプライトシステム(Layer 1)
 // v1-0b.1(CHANGELOG フェーズ 51): main は PNG 経路 + programmatic フォールバック、
 //                                   sub は完全 programmatic に分離。
+// v1-0b.1.1(CHANGELOG フェーズ 53): main は BG/FG の 2 段キャンバスに分離。
+//                                    BG = explored 全タイル(CSS filter: blur で常時ぼかし)、
+//                                    FG = visible タイル + エンティティ(blur なし)。
+//                                    near/known mode は実質「CSS blur 経由」に集約され、
+//                                    主画面では常に visible パレットを使う。副画面は 3 mode 維持。
 // ==============================================================================
 //
 // 構造(論点 C 合意 2026-04-24):
@@ -51,22 +56,15 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 //   SPRITE_DRAWERS_PROG: 全 programmatic(副画面 + PNG 未配置時のフォールバック)
 //   SPRITE_DRAWERS_PNG:  主画面用、PNG が無ければ Prog にフォールバック
 //
-// mode 表現:
-//   - PROG drawer: SPRITE_PALETTES[mode] でパレット切替(従来通り)
-//   - PNG drawer:  visible は PNG そのまま、near/known は ctx.filter で post-effect
+// mode 表現(v1-0b.1.1 で再整理):
+//   - 主画面 BG/FG: 常に visible パレット(blur は CSS で BG canvas に常時適用)
+//   - 副画面: visible / near / known の 3 パレットを SPRITE_PALETTES から選択
+//   PNG drawer は ctx.filter を一切使わない(iOS Safari < 18 で未実装のため)
 // ==============================================================================
 
 // PNG 描画スケール:アセットは 128×111 px(頂点間 128 = 2×size、辺間 111 ≈ √3×size、size=64)。
 // drawImage 時の dst サイズは tileRadius を size とみなして比例縮小する。
 const SQRT3 = Math.sqrt(3);
-
-// near/known mode の post-effect。PNG drawer のみで適用。
-// 数値は v1-0b.3 で実機チューニング予定。
-const MODE_FILTERS = {
-  visible: null,
-  near: 'blur(1.5px) brightness(0.92) saturate(0.85)',
-  known: 'brightness(0.42) saturate(0.55)',
-};
 
 // タイル色のバリアント補正(輝度調整)。
 // v1-0a 初回は ±5% で控えめにしたが、実機で見えなさすぎたため ±15% に強化。
@@ -339,6 +337,7 @@ function drawSpriteImage(ctx, img, cx, cy, tileRadius, rotationIndex) {
 // PNG drawer の共通実装。アセットがあれば PNG、無ければ programmatic にフォールバック。
 // useTileRotation=true(stairs)なら、PNG 自体の個別 rotation は 0 にし、タイル単位回転は
 // drawCellLayer1 側の getTileRotation で適用させる(二重回転防止)。
+// v1-0b.1.1: ctx.filter を廃止(iOS Safari < 18 未対応)。blur は CSS で BG canvas に常時適用。
 function makePngDrawer(kind, getStateForKey, useTileRotation, progDrawer) {
   return (ctx, cx, cy, tileRadius, spriteKey, mode) => {
     const state = getStateForKey ? getStateForKey(spriteKey) : null;
@@ -350,17 +349,8 @@ function makePngDrawer(kind, getStateForKey, useTileRotation, progDrawer) {
       return;
     }
 
-    const filter = MODE_FILTERS[mode];
     const rotationIndex = useTileRotation ? 0 : (spriteKey.rotation ?? 0);
-
-    if (filter) {
-      ctx.save();
-      ctx.filter = filter;
-      drawSpriteImage(ctx, asset, cx, cy, tileRadius, rotationIndex);
-      ctx.restore();
-    } else {
-      drawSpriteImage(ctx, asset, cx, cy, tileRadius, rotationIndex);
-    }
+    drawSpriteImage(ctx, asset, cx, cy, tileRadius, rotationIndex);
   };
 }
 
@@ -436,28 +426,60 @@ function featureOverlay(cell) {
   return null;
 }
 
+// ==============================================================================
+// v1-0b.1.1(CHANGELOG フェーズ 53): タイル mode 決定関数(layer 別)
+// ==============================================================================
+//
+// 主画面は BG / FG の 2 段キャンバス構造に分離されたため、layer ごとに
+// 「どのタイルをどの mode で描くか」を決める判定を切り出す。
+//
+// - modeForMainBG: 主画面 BG canvas(CSS で blur 常時適用)。explored 全タイルを
+//                   visible パレットで描画。unknown は unknown パレット。
+// - modeForMainFG: 主画面 FG canvas(blur なし)。visible タイルのみ visible パレットで
+//                   描画。それ以外は null = skip(BG が透けて見える)。
+// - modeForSub:    副画面(単一キャンバス)。従来通り visible / near / known / unknown を
+//                   使い分けてパレットで表現する(CSS blur が効かないため)。
+//
+// 主画面では blur が CSS で BG canvas に常時適用されるため、タイル色は常に
+// visible パレットで描画する(near/known パレットは副画面でのみ使う)。
+// ==============================================================================
+
+function modeForMainBG(state, cell) {
+  return state.explored.has(cell.key()) ? 'visible' : 'unknown';
+}
+
+function modeForMainFG(state, cell) {
+  return state.visible.has(cell.key()) ? 'visible' : null;
+}
+
+function modeForSub(state, cell) {
+  const key = cell.key();
+  if (state.visible.has(key)) return 'visible';
+  if (state.nearAware.has(key)) return 'near';
+  if (state.explored.has(key)) return 'known';
+  return 'unknown';
+}
+
 // Layer 1: タイル天面スプライトの描画。
 // 呼び出し側で world 回転を適用済みの座標で呼ぶ。
 // v1-0b.1: drawers 引数で drawer set を切り替え(主画面 = PNG 経路、副画面 = Prog)。
-function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, drawers) {
-  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
-  const key = cell.key();
-  const isKnown = state.explored.has(key);
+// v1-0b.1.1: mode を呼び出し側から受け取る形に変更(layer 別判定をここに持ち込まない)。
+//             mode === null は skip、mode === 'unknown' は黒塗り、それ以外はパレット描画。
+function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, drawers, mode) {
+  if (mode === null) return;  // skip(主画面 FG で visible でないセル)
 
-  if (!isKnown) {
+  const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
+
+  if (mode === 'unknown') {
     drawHex(ctx, pixel.x, pixel.y, tileRadius - 1, CONFIG.colors.unknown, CONFIG.colors.unknownStroke);
     return;
   }
-
-  const isVisible = state.visible.has(key);
-  const isNearAware = state.nearAware.has(key);
-  const mode = isVisible ? 'visible' : (isNearAware ? 'near' : 'known');
 
   const sprite = getTileSprite(cell);
   const drawer = drawers[sprite.kind] ?? drawers.void;
 
   // タイル個別回転(v1-0a S7:stairs は enterHeading 方向が画面上を向くよう回転、
-  // それ以外のタイルは 0 を返す)。CHANGELOG フェーズ 50 でコメント更新。
+  // それ以外のタイルは 0 を返す)。CHANGELOG フェーズ 50 でコメント更新、フェーズ 52 で式修正。
   const tileRotDeg = getTileRotation(cell);
   if (tileRotDeg !== 0) {
     ctx.save();
@@ -554,10 +576,17 @@ function pathHexAt(ctx, cx, cy, size) {
   ctx.closePath();
 }
 
-// shadow pass: 各 z=+h source タイルから shifted hex 影を生成し、6 隣接の各 recipient で
-// clip して描画する。recipient と source の両方が explored、recipient は z=0 が必要。
+// shadow pass: 各 z=+h source タイルから shifted hex 影を生成し、隣接の各 recipient で
+// clip して描画する。recipient は z=0 が必要(z=+h 同士は影が落ちない)。
 // world 回転の内側で呼ばれる(影方向は世界座標で絶対固定)。
-function drawShadowPass(ctx, cells, tileRadius, originX, originY, state) {
+//
+// v1-0b.1.1(フェーズ 53): 2 段キャンバス対応で source/recipient の有効性判定を
+// 述語関数として外部化。
+//   - BG: source = explored ∧ z=+h、recipient = explored ∧ z=0
+//   - FG: source = explored ∧ z=+h、recipient = visible ∧ z=0
+//          (visible 床に対しては FOV 外の壁からも影を落とす。BG の影が FG の visible
+//           タイルに上書きされて消えるのを防ぐ)
+function drawShadowPass(ctx, cells, tileRadius, originX, originY, state, isSourceCell, isRecipientCell) {
   const { dx, dy } = computeShadowOffset(tileRadius);
   if (dx === 0 && dy === 0) return;  // length 0 = 影なし
   const worldRadius = state.config.worldRadius;
@@ -573,11 +602,10 @@ function drawShadowPass(ctx, cells, tileRadius, originX, originY, state) {
   const fillStyle = `rgba(0, 0, 0, ${SHADOW_CONFIG.alpha})`;
 
   for (const sourceCell of cells) {
-    const sourceKey = sourceCell.key();
-    if (!state.explored.has(sourceKey)) continue;
+    if (!isSourceCell(sourceCell)) continue;
     if (getTileHeight(sourceCell) === 0) continue;  // source は z=+h のみ
 
-    const sourcePixel = pixelByKey.get(sourceKey);
+    const sourcePixel = pixelByKey.get(sourceCell.key());
     const shadowCx = sourcePixel.x + dx;
     const shadowCy = sourcePixel.y + dy;
 
@@ -586,11 +614,10 @@ function drawShadowPass(ctx, cells, tileRadius, originX, originY, state) {
     for (let h = 0; h < 6; h += 1) {
       const recipient = getNeighbor(sourceCell, h);
       if (!isInsideWorld(recipient, worldRadius)) continue;
-      const recipientKey = recipient.key();
-      if (!state.explored.has(recipientKey)) continue;
+      if (!isRecipientCell(recipient)) continue;
       if (getTileHeight(recipient) > 0) continue;  // recipient は z=0 のみ
 
-      const recipientPixel = pixelByKey.get(recipientKey);
+      const recipientPixel = pixelByKey.get(recipient.key());
       if (!recipientPixel) continue;  // localRadius 外(= 描画されない)→ skip
 
       ctx.save();
@@ -825,8 +852,23 @@ export function updateEnemyStatusBox(state) {
   }).join('');
 }
 
-export function renderMain(state) {
-  const canvas = document.getElementById('mainCanvas');
+// ==============================================================================
+// v1-0b.1.1(フェーズ 53): 主画面 = BG canvas + FG canvas の 2 段構成
+// ==============================================================================
+//
+// BG canvas(`#mainCanvasBG`): explored 全タイル + shadow pass + stairs edges + Layer 2。
+//                              CSS の `filter: blur(...)` を常時適用 = 視界外がぼやけて見える。
+//                              エンティティは描かない(動くものの過去位置を blur で残すと不正確)。
+//
+// FG canvas(`#mainCanvasFG`): visible タイル(BG を上書き)+ visible 床への shadow pass +
+//                              stairs edges + visible/nearAware エンティティ + プレイヤーマーカー +
+//                              UI overlay。フィルタなし = 鮮明。
+//
+// world 回転は両方のキャンバスに同じ方向・同じ量で適用する。
+// ==============================================================================
+
+function getMainViewParams(canvasId, state) {
+  const canvas = document.getElementById(canvasId);
   const ctx = canvas.getContext('2d');
   const width = canvas.width;
   const height = canvas.height;
@@ -835,39 +877,92 @@ export function renderMain(state) {
   const rotationDeg = -90 - HEADING_ANGLES_DEG[state.previewFacing];
   const tileRadius = CONFIG.main.tileRadius;
   const cells = state.allWorldCells.filter((cell) => hexDistance(cell, state.playerPos) <= CONFIG.main.localRadius);
+  return { canvas, ctx, width, height, originX, originY, rotationDeg, tileRadius, cells };
+}
+
+export function renderMainBG(state) {
+  const { ctx, width, height, originX, originY, rotationDeg, tileRadius, cells } =
+    getMainViewParams('mainCanvasBG', state);
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = CONFIG.colors.background;
   ctx.fillRect(0, 0, width, height);
 
-  // world 回転をかけて Layer 1/2/3 を描画(プレイヤー基準のヘディングアップ)
   ctx.save();
   ctx.translate(originX, originY);
   ctx.rotate((rotationDeg * Math.PI) / 180);
   ctx.translate(-originX, -originY);
 
-  // Layer 1: タイル天面スプライト(主画面 = PNG 経路 + Prog フォールバック)
+  // Layer 1: explored 全タイル(unknown は黒、explored は visible パレット)
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
-    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, SPRITE_DRAWERS_PNG);
+    const mode = modeForMainBG(state, cell);
+    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, SPRITE_DRAWERS_PNG, mode);
   }
 
-  // v1-0b.1: Layer 1.5: shadow pass(主画面のみ、world 回転内側 = 影は世界座標固定)
-  drawShadowPass(ctx, cells, tileRadius, originX, originY, state);
+  // shadow pass: BG 用 = source/recipient とも explored
+  const isExplored = (cell) => state.explored.has(cell.key());
+  drawShadowPass(ctx, cells, tileRadius, originX, originY, state, isExplored, isExplored);
 
-  // stairs の通過辺強調(v1-0a では Layer 1 の補助。S7 で階段回転が動いたら再検討)
+  // stairs edges(explored タイルに対して)
   for (const cell of cells) {
+    if (!state.explored.has(cell.key())) continue;
     const drawHexCoord = cell.subtract(state.playerPos);
     drawStairsEdges(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
   }
 
-  // Layer 2: タイル上 feature オーバーレイ(v1 未使用、schema 確立のみ)
+  // Layer 2(v1 未使用、schema 確立のみ)
   for (const cell of cells) {
+    if (!state.explored.has(cell.key())) continue;
     const drawHexCoord = cell.subtract(state.playerPos);
     drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
   }
 
-  // Layer 3: 敵
+  ctx.restore();
+  // BG にはエンティティ・プレイヤーマーカー・UI overlay を描かない(FG が担当)
+}
+
+export function renderMainFG(state) {
+  const { ctx, width, height, originX, originY, rotationDeg, tileRadius, cells } =
+    getMainViewParams('mainCanvasFG', state);
+
+  // FG は透明背景でクリア(BG を透過させる)
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.translate(originX, originY);
+  ctx.rotate((rotationDeg * Math.PI) / 180);
+  ctx.translate(-originX, -originY);
+
+  // Layer 1: visible タイルのみ(visible でないセルは null 返却で skip → BG が透けて見える)
+  for (const cell of cells) {
+    const drawHexCoord = cell.subtract(state.playerPos);
+    const mode = modeForMainFG(state, cell);
+    drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, state, SPRITE_DRAWERS_PNG, mode);
+  }
+
+  // shadow pass: FG 用 = source は explored(FOV 外の壁も影を落とす)、recipient は visible 床のみ
+  // これがないと visible 床に対して FOV 外の壁が落とす影が「BG 上書きで消える」現象が起こる
+  const isExplored = (cell) => state.explored.has(cell.key());
+  const isVisible = (cell) => state.visible.has(cell.key());
+  drawShadowPass(ctx, cells, tileRadius, originX, originY, state, isExplored, isVisible);
+
+  // stairs edges(visible タイルのみ)
+  for (const cell of cells) {
+    if (!state.visible.has(cell.key())) continue;
+    const drawHexCoord = cell.subtract(state.playerPos);
+    drawStairsEdges(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
+  }
+
+  // Layer 2(visible のみ、v1 未使用)
+  for (const cell of cells) {
+    if (!state.visible.has(cell.key())) continue;
+    const drawHexCoord = cell.subtract(state.playerPos);
+    drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
+  }
+
+  // Layer 3: エンティティ(visible = 完全情報、nearAware = 気配アイコンのみ)
+  // drawEntityOverlay は visible/near の判定を内包しており、blur されない FG で描かれる
   for (const cell of cells) {
     const drawHexCoord = cell.subtract(state.playerPos);
     drawEntityOverlay(ctx, cell, drawHexCoord, tileRadius, originX, originY, state);
@@ -875,14 +970,19 @@ export function renderMain(state) {
 
   ctx.restore();
 
-  // Layer 3 続き: プレイヤーマーカー。主画面ではプレイヤーは常にキャンバス中心、
-  // world 回転の影響を受けずに常に正面向き。
+  // プレイヤーマーカー(world 回転外、キャンバス中心、常に正面向き)
   drawPlayerMarker(ctx, originX, originY, tileRadius);
 
-  // UI overlay: 向き矢印(preview/committed)、中央ラベル
+  // UI overlay
   drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.preview, 46);
   drawFacingArrow(ctx, originX, originY, -90, CONFIG.colors.committed, 28);
   drawLabel(ctx, originX, originY + 58, '主画面中央 = プレイヤー位置', CONFIG.colors.muted, 12);
+}
+
+// 後方互換: 既存の呼び出し箇所(もしあれば)用。BG → FG の順に呼ぶ。
+export function renderMain(state) {
+  renderMainBG(state);
+  renderMainFG(state);
 }
 
 // v1-0a(NEXT_STEPS §2.1): 副画面の worldRadius 境界描画。
@@ -935,7 +1035,8 @@ export function renderSub(state) {
 
   // Layer 1(副画面は完全 programmatic、shadow pass なし = 構造表示のため)
   for (const cell of state.allWorldCells) {
-    drawCellLayer1(ctx, cell, cell, tileRadius, originX, originY, state, SPRITE_DRAWERS_PROG);
+    const mode = modeForSub(state, cell);
+    drawCellLayer1(ctx, cell, cell, tileRadius, originX, originY, state, SPRITE_DRAWERS_PROG, mode);
   }
 
   // stairs edges
@@ -967,6 +1068,7 @@ export function renderSub(state) {
 export function render(state) {
   updateStatusBox(state);
   updateEnemyStatusBox(state);
-  renderMain(state);
+  renderMainBG(state);
+  renderMainFG(state);
   renderSub(state);
 }
