@@ -101,13 +101,13 @@ export function getSpriteAsset(kind, state, variant) {
   return assetCache.get(spriteAssetKey(kind, state, effectiveVariant)) ?? null;
 }
 
-// debug 用: キャッシュ状況の集計
+// debug 用: キャッシュ状況の集計。preloadAllSprites の戻り値と用語を揃える({total, ok})。
 export function getAssetStats() {
   let total = 0;
-  let loaded = 0;
+  let ok = 0;
   for (const [, img] of assetCache.entries()) {
     total += 1;
-    if (img !== null) loaded += 1;
+    if (img !== null) ok += 1;
   }
-  return { total, loaded };
+  return { total, ok };
 }

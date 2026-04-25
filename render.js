@@ -418,7 +418,13 @@ function getTileRotation(cell) {
   const feature = getFeature(cell);
   if (feature?.kind === 'stairs') {
     const enterHeading = feature.params?.enterHeading ?? 0;
-    return -90 - HEADING_ANGLES_DEG[enterHeading];
+    // PNG / programmatic スプライトの基準方向は「画面上向き」(-90°)。
+    // enterHeading 方向に基準方向を回す回転角:
+    //   HEADING_ANGLES_DEG[h] - (-90) = HEADING_ANGLES_DEG[h] + 90
+    // 旧式 `-90 - HEADING_ANGLES_DEG[h]` は対称軸(N/S)では偶然一致するが、
+    // 対角 4 方向(NE/SE/SW/NW)で鏡像方向に回る bug があり、
+    // CHANGELOG フェーズ 51 修正版でフェーズ 52 にて訂正。
+    return HEADING_ANGLES_DEG[enterHeading] + 90;
   }
   return 0;
 }
