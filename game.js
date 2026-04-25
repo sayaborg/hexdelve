@@ -9,6 +9,7 @@ import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
 import { render } from './render.js';
 import { bindControls, bindKeyboard, bindMainCanvasGestures } from './input.js';
+import { preloadAllSprites } from './asset-loader.js';
 
 const state = {
   config: CONFIG,
@@ -744,7 +745,22 @@ function bootstrap() {
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0a 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+
+  // v1-0b.1(CHANGELOG フェーズ 51): スプライトプリロード。
+  // 非同期に投入し、完了時に再 render する(progressive enhancement)。
+  // アセットが揃っていない初期段階は programmatic フォールバックで描画継続するため、
+  // この await を待たなくても操作は始められる。
+  preloadAllSprites().then(({ total, ok }) => {
+    if (ok > 0) {
+      logInternal('system', 'SPRITE', `スプライトアセット読み込み完了: ${ok}/${total} 枚(残りは programmatic フォールバック)。`);
+      render(state);  // PNG が来たので再描画
+    } else if (total > 0) {
+      logInternal('system', 'SPRITE', `スプライトアセット未配置(${total} 枚すべて 404)。programmatic フォールバックで描画。`);
+    }
+  }).catch((err) => {
+    logInternal('system', 'SPRITE', `スプライトアセット読み込みエラー: ${err?.message ?? err}`);
+  });
 }
 
 bootstrap();

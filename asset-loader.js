@@ -1,4 +1,4 @@
-// v1-0b.1(NEXT_STEPS §2.1、CHANGELOG フェーズ 49):
+// v1-0b.1(NEXT_STEPS §2.1、CHANGELOG フェーズ 51):
 // PNG スプライトのプリロードとキャッシュを担当。
 //
 // 設計原則:
