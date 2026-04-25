@@ -475,23 +475,46 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
 // ==============================================================================
 //
 // 「内部環境なので影はない」が物理的に正しいが、立体感のため疑似ドロップシャドウを
-// 落とす。光源は世界座標の南中(world-south 固定、副画面ノースアップ規則と整合)。
+// 落とす。物理モデル:
 //
-// モデル:
-//   - z=+h タイル(壁ブロック / closed・locked ドア)が、北隣の z=0 タイルに影を落とす
-//   - 影は recipient の南半分の trapezoid 領域(面積 ~5/24 ≈ 1/4.8、alpha で減衰)
-//   - 主画面のみ実行(副画面は構造表示のため shadow pass を持たない)
+//   - z=+h ブロック(hex)はそれ自身と同形状の hex 影を落とす
+//   - 影 = source hex を SHADOW_CONFIG の (angle, length) で平行移動した polygon
+//   - 移動先で 3 枚の隣接タイルに跨る形で見える(angle / length の値による)
+//   - 各 recipient タイルは自身の hex で clip して shifted source hex の断片を描画
+//
+// SHADOW_CONFIG パラメータ:
+//   angleDeg     - 影の方向。N=0°、E=90°、時計回り(画面座標と同じ規則)
+//   lengthRatio  - 影の長さ。タイル直径(2 × tileRadius)を 1 とする
+//   alpha        - 影の不透明度
+//
+// 例: angleDeg=0, lengthRatio=0.25 → 北方向に直径 25% 分の変位。
+//     z=+h ブロックの影が北側 3 タイル(N / NE / NW)に薄く跨る。
 //
 // 描画順:
 //   Layer 1(タイル天面) → shadow pass → stairs edges → Layer 2 → Layer 3
+//
+// 主画面のみ実行(副画面は構造表示のため shadow pass を持たない)。
+// world 回転の内側で呼ばれるため、影方向は「世界座標の絶対方向」固定
+// (副画面ノースアップ規則と整合、player heading によらない)。
 //
 // 拡張点:
 //   getTileHeight(cell) を v1+ で柱・障害物・unstable など追加した時の単一フック点とする。
 // ==============================================================================
 
+const SHADOW_CONFIG = {
+  angleDeg: 0,        // N=0、時計回り
+  lengthRatio: 0.25,  // タイル直径(2 × tileRadius)に対する比率
+  alpha: 0.32,
+};
+
 function getTileHeight(cell) {
   const runtime = getRuntimeCell(cell);
-  if (!runtime) return 0;
+  if (!runtime) {
+    // rooms_classic 等で構造化セル外(= void)。描画時 drawVoidSpriteProg が
+    // wall パレットで塗っており、視覚上は wall と同等のため z=+h として扱う。
+    // これがないと rooms_classic family で部屋外周の壁が影を落とさなくなる。
+    return 1;
+  }
   // 壁(blocked support): 物理的に立っている → z=+h
   if (!runtime.canStandAtHere) return 1;
   // closed / locked ドア: 柱として立っている → z=+h
@@ -503,42 +526,74 @@ function getTileHeight(cell) {
   return 0;
 }
 
-// recipient hex の南側 trapezoid を半透明黒で塗る。
-// 上辺は y = +size×√3/4(中心の少し南)、下辺は y = +size×√3/2(南エッジ)。
-// 上辺幅 3×size/2、下辺幅 size、面積比 ~0.208(≈ 1/4.8)。
-// drawHex が size = (tileRadius - 1) を使うため、shadow も同じ size に揃える。
-function drawDropShadow(ctx, cx, cy, tileRadius) {
-  const size = tileRadius - 1;
-  const yTop = cy + size * SQRT3 / 4;
-  const yBottom = cy + size * SQRT3 / 2;
-  ctx.beginPath();
-  ctx.moveTo(cx + size * 3 / 4, yTop);    // top-east(edge 0→1 の中点)
-  ctx.lineTo(cx - size * 3 / 4, yTop);    // top-west(edge 2→3 の中点)
-  ctx.lineTo(cx - size / 2,     yBottom); // SW corner(corner 2)
-  ctx.lineTo(cx + size / 2,     yBottom); // SE corner(corner 1)
-  ctx.closePath();
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
-  ctx.fill();
+// SHADOW_CONFIG.angleDeg / lengthRatio を pixel 変位ベクトル (dx, dy) に変換。
+// 画面座標系では +x = 東、+y = 南なので、N(angle=0)は -y 方向。
+function computeShadowOffset(tileRadius) {
+  const angleRad = (SHADOW_CONFIG.angleDeg * Math.PI) / 180;
+  const lengthPx = SHADOW_CONFIG.lengthRatio * 2 * tileRadius;
+  return {
+    dx: lengthPx * Math.sin(angleRad),
+    dy: -lengthPx * Math.cos(angleRad),
+  };
 }
 
-// shadow pass: 各 recipient タイルについて、その south 隣(heading 3)が z>0 なら影を描く。
-// recipient は z=0、recipient と source は両方とも explored であることが必要。
-// world 回転の内側で呼ばれるため、影方向は「世界南」固定(player heading によらない)。
+function pathHexAt(ctx, cx, cy, size) {
+  const corners = polygonCorners(cx, cy, size);
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  for (let i = 1; i < 6; i += 1) {
+    ctx.lineTo(corners[i].x, corners[i].y);
+  }
+  ctx.closePath();
+}
+
+// shadow pass: 各 z=+h source タイルから shifted hex 影を生成し、6 隣接の各 recipient で
+// clip して描画する。recipient と source の両方が explored、recipient は z=0 が必要。
+// world 回転の内側で呼ばれる(影方向は世界座標で絶対固定)。
 function drawShadowPass(ctx, cells, tileRadius, originX, originY, state) {
+  const { dx, dy } = computeShadowOffset(tileRadius);
+  if (dx === 0 && dy === 0) return;  // length 0 = 影なし
   const worldRadius = state.config.worldRadius;
+  const hexSize = tileRadius - 1;  // drawHex と揃える(stroke 用 1px ギャップ)
+
+  // pixel 位置を pre-compute(同じ cell を source / recipient で 2 度引く可能性があるため)
+  const pixelByKey = new Map();
   for (const cell of cells) {
-    const cellKey = cell.key();
-    if (!state.explored.has(cellKey)) continue;
-    if (getTileHeight(cell) > 0) continue;  // recipient は z=0 のみ
-
-    const south = getNeighbor(cell, 3);
-    if (!isInsideWorld(south, worldRadius)) continue;
-    if (!state.explored.has(south.key())) continue;
-    if (getTileHeight(south) === 0) continue;
-
     const drawHexCoord = cell.subtract(state.playerPos);
-    const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
-    drawDropShadow(ctx, pixel.x, pixel.y, tileRadius);
+    pixelByKey.set(cell.key(), hexToPixel(drawHexCoord, tileRadius, originX, originY));
+  }
+
+  const fillStyle = `rgba(0, 0, 0, ${SHADOW_CONFIG.alpha})`;
+
+  for (const sourceCell of cells) {
+    const sourceKey = sourceCell.key();
+    if (!state.explored.has(sourceKey)) continue;
+    if (getTileHeight(sourceCell) === 0) continue;  // source は z=+h のみ
+
+    const sourcePixel = pixelByKey.get(sourceKey);
+    const shadowCx = sourcePixel.x + dx;
+    const shadowCy = sourcePixel.y + dy;
+
+    // 6 隣接を全て見て、recipient 該当なら shifted hex を recipient hex で clip して描画。
+    // 影方向に応じて 3 枚に重なる(残り 3 枚は shifted hex が届かないため空 fill = no-op)。
+    for (let h = 0; h < 6; h += 1) {
+      const recipient = getNeighbor(sourceCell, h);
+      if (!isInsideWorld(recipient, worldRadius)) continue;
+      const recipientKey = recipient.key();
+      if (!state.explored.has(recipientKey)) continue;
+      if (getTileHeight(recipient) > 0) continue;  // recipient は z=0 のみ
+
+      const recipientPixel = pixelByKey.get(recipientKey);
+      if (!recipientPixel) continue;  // localRadius 外(= 描画されない)→ skip
+
+      ctx.save();
+      pathHexAt(ctx, recipientPixel.x, recipientPixel.y, hexSize);
+      ctx.clip();
+      pathHexAt(ctx, shadowCx, shadowCy, hexSize);
+      ctx.fillStyle = fillStyle;
+      ctx.fill();
+      ctx.restore();
+    }
   }
 }
 
