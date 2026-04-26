@@ -25,11 +25,16 @@
         <p>プレイヤー基準・仮向き追従。敵は可視時に向きも表示する。近接知覚時は存在だけ分かる。<br>
         <strong>主画面タップ</strong>:画面中央=待機、外周方向=その方向へ移動。<strong>スワイプ</strong>:回頭(画面中心を軸にポインタを回す)。</p>
         <div class="canvas-frame">
-          <!-- v1-0b.1.1(フェーズ 53):主画面は BG canvas + FG canvas の 2 段構成。
+          <!-- v1-0b.1.1(フェーズ 53、フェーズ 53.1 で修正):主画面は BG canvas + FG canvas の 2 段構成。
                BG = explored 全タイルを描画、CSS の filter: blur(...) で常時ぼかし、視界外の表現。
                FG = visible タイル + エンティティ + プレイヤーマーカー + UI overlay、フィルタなし。
-               touch event は FG のみで受ける(BG は pointer-events: none)。 -->
-          <canvas id="mainCanvasBG" width="520" height="520" aria-hidden="true"></canvas>
+               touch event は FG のみで受ける(BG レイヤは pointer-events: none)。
+               BG canvas は <div class="canvas-bg-layer"> でラップして、ラッパー div に filter を適用する。
+               WebKit(iOS Safari)は canvas 要素自体に直接 CSS filter をかけても描画内容に効かない
+               既知バグがあるため、div ラッパー経由で適用する。 -->
+          <div class="canvas-bg-layer" aria-hidden="true">
+            <canvas id="mainCanvasBG" width="520" height="520"></canvas>
+          </div>
           <canvas id="mainCanvasFG" width="520" height="520" tabindex="0"></canvas>
           <!-- v1-0a: タップ目安として 6 方向矢印 + 中心待機マーカーをうっすら常時表示。
                viewBox は 100×100 の比率系で書き、CSS で canvas と同サイズに伸ばす。
