@@ -5,7 +5,11 @@
 //   - PNG が無くても動く(programmatic フォールバックを render 側に保持)
 //   - 段階的投入を許容(kind ごとに揃わなくても OK、足りない asset は null を返す)
 //   - 主画面のみが消費(副画面は完全 programmatic、本モジュールを参照しない)
-//   - サイズは 128×111 px(頂点間 × 辺間、size=64、flat-top hex)
+//   - サイズは 256×222 px(頂点間 × 辺間、size=128、flat-top hex)。
+//     v1-0b.1.3(フェーズ 55)で 128×111 から 2 倍に拡大。
+//     iOS Retina(DPR=2)で実機物理ピクセルとほぼ 1:1、PC(DPR=1)では縮小描画になる。
+//     drawImage は dw = tileRadius * 2、dh = tileRadius * √3 の比率で行うため、
+//     PNG 解像度の変更にコード変更は不要(比率ベース描画)。
 //
 // アセット配置: assets/sprites/ ディレクトリ
 //   命名規則:
