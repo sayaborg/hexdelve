@@ -7,7 +7,7 @@ import { generateNaturalCaveMap } from './map-family-cave-natural.js';
 import { generateClassicRoomsMap } from './map-family-rooms-classic.js';
 import { computePerception, bestFacingToward } from './perception.js';
 import { planEnemyActions, updateEnemyAwareness } from './enemy-ai.js';
-import { render } from './render.js';
+import { render, initCanvasHiDPI, invalidateRender } from './render.js';
 import { bindControls, bindKeyboard, bindMainCanvasGestures } from './input.js';
 import { preloadAllSprites } from './asset-loader.js';
 
@@ -700,6 +700,9 @@ function resetRunWithGeneratedMap(mapId = state.config.defaultGeneratedMapId, { 
   refreshVisibility();
   updateEnemyAwareness(state, { aiTransition: logAiTransition });
   updateMapUi();
+  // v1-0b.1.3(フェーズ 55、最適化 G): map 切り替えは renderHash が偶然一致して
+  // skip されないよう invalidateRender。
+  invalidateRender();
   render(state);
 
   const standableCount = generated.meta.floorCount ?? generated.floor?.size ?? generated.cells?.filter((cell) => cell.support === 'stable').length ?? 0;
@@ -742,6 +745,10 @@ function bootstrap() {
   });
   setupMapUi();
 
+  // v1-0b.1.3(フェーズ 55、最適化 I): HiDPI セットアップは bootstrap で 1 回だけ。
+  // 以降は各 render 関数の冒頭で resetCanvasTransform でスケール累積を防ぐ。
+  initCanvasHiDPI();
+
   // v1-0b.1.2(フェーズ 54、A-2): RENDER_TUNING.blur.mainBgPx を CSS 変数 --main-blur に書き出す。
   // .canvas-bg-layer の filter: blur(var(--main-blur, 2px)) が参照する。
   document.documentElement.style.setProperty('--main-blur', `${RENDER_TUNING.blur.mainBgPx}px`);
@@ -749,7 +756,7 @@ function bootstrap() {
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.2 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.4 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
 
   // v1-0b.1(CHANGELOG フェーズ 51): スプライトプリロード。
   // 非同期に投入し、完了時に再 render する(progressive enhancement)。
@@ -758,7 +765,10 @@ function bootstrap() {
   preloadAllSprites().then(({ total, ok }) => {
     if (ok > 0) {
       logInternal('system', 'SPRITE', `スプライトアセット読み込み完了: ${ok}/${total} 枚(残りは programmatic フォールバック)。`);
-      render(state);  // PNG が来たので再描画
+      // v1-0b.1.3(フェーズ 55、最適化 G): render は state ハッシュベースで skip するため、
+      // PNG 投入後に強制再描画する場合は invalidateRender を先に呼ぶ。
+      invalidateRender();
+      render(state);
     } else if (total > 0) {
       logInternal('system', 'SPRITE', `スプライトアセット未配置(${total} 枚すべて 404)。programmatic フォールバックで描画。`);
     }

@@ -26,6 +26,21 @@ function drawHex(ctx, centerX, centerY, size, fillStyle, strokeStyle) {
   ctx.stroke();
 }
 
+// v1-0b.1.4(フェーズ 56): stroke なしの hex 塗り。size = tileRadius と組み合わせれば
+// 隣接 hex が辺で完全接続される(隙間なし)。unknown 領域や、shadow pass のように
+// 「タイル個別の境界線が不要」な用途に使う。
+function fillHexNoStroke(ctx, centerX, centerY, size, fillStyle) {
+  const corners = polygonCorners(centerX, centerY, size);
+  ctx.beginPath();
+  ctx.moveTo(corners[0].x, corners[0].y);
+  for (let i = 1; i < corners.length; i += 1) {
+    ctx.lineTo(corners[i].x, corners[i].y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fillStyle;
+  ctx.fill();
+}
+
 function drawLabel(ctx, x, y, text, color, fontSize = 11) {
   ctx.fillStyle = color;
   ctx.font = `${fontSize}px system-ui, sans-serif`;
@@ -471,7 +486,10 @@ function drawCellLayer1(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
   const pixel = hexToPixel(drawHexCoord, tileRadius, originX, originY);
 
   if (mode === 'unknown') {
-    drawHex(ctx, pixel.x, pixel.y, tileRadius - 1, CONFIG.colors.unknown, CONFIG.colors.unknownStroke);
+    // v1-0b.1.4(フェーズ 56): unknown は隣接タイル同士が辺で連続するように
+    // size=tileRadius + stroke なしで塗る。「タイル個別の hex 枠線が見える」
+    // 「隣接 unknown 同士に隙間が見える」状態を解消し、未踏領域を一塊の黒として表現する。
+    fillHexNoStroke(ctx, pixel.x, pixel.y, tileRadius, CONFIG.colors.unknown);
     return;
   }
 
@@ -507,11 +525,11 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
 // 落とす。物理モデル:
 //
 //   - z=+h ブロック(hex)はそれ自身と同形状の hex 影を落とす
-//   - 影 = source hex を SHADOW_CONFIG の (angle, length) で平行移動した polygon
+//   - 影 = source hex を RENDER_TUNING.shadow の (angle, length) で平行移動した polygon
 //   - 移動先で 3 枚の隣接タイルに跨る形で見える(angle / length の値による)
 //   - 各 recipient タイルは自身の hex で clip して shifted source hex の断片を描画
 //
-// SHADOW_CONFIG パラメータ:
+// RENDER_TUNING.shadow パラメータ:
 //   angleDeg     - 影の方向。N=0°、E=90°、時計回り(画面座標と同じ規則)
 //   lengthRatio  - 影の長さ。タイル直径(2 × tileRadius)を 1 とする
 //   alpha        - 影の不透明度
@@ -530,9 +548,9 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
 //   getTileHeight(cell) を v1+ で柱・障害物・unstable など追加した時の単一フック点とする。
 // ==============================================================================
 
-// v1-0b.1.2(フェーズ 54、A-2): 値は config.js の RENDER_TUNING.shadow に集約。
-// この const は後方互換のため残し、RENDER_TUNING を再 export する形で参照を集中させる。
-const SHADOW_CONFIG = RENDER_TUNING.shadow;
+// v1-0b.1.2(フェーズ 54): 値は config.js の RENDER_TUNING.shadow に集約。
+// v1-0b.1.3(フェーズ 55、最適化 H): 互換用 SHADOW_CONFIG const を削除し、
+// 利用側で RENDER_TUNING.shadow を直接参照する形に統一。
 
 function getTileHeight(cell) {
   const runtime = getRuntimeCell(cell);
@@ -554,11 +572,11 @@ function getTileHeight(cell) {
   return 0;
 }
 
-// SHADOW_CONFIG.angleDeg / lengthRatio を pixel 変位ベクトル (dx, dy) に変換。
+// RENDER_TUNING.shadow.angleDeg / lengthRatio を pixel 変位ベクトル (dx, dy) に変換。
 // 画面座標系では +x = 東、+y = 南なので、N(angle=0)は -y 方向。
 function computeShadowOffset(tileRadius) {
-  const angleRad = (SHADOW_CONFIG.angleDeg * Math.PI) / 180;
-  const lengthPx = SHADOW_CONFIG.lengthRatio * 2 * tileRadius;
+  const angleRad = (RENDER_TUNING.shadow.angleDeg * Math.PI) / 180;
+  const lengthPx = RENDER_TUNING.shadow.lengthRatio * 2 * tileRadius;
   return {
     dx: lengthPx * Math.sin(angleRad),
     dy: -lengthPx * Math.cos(angleRad),
@@ -589,7 +607,10 @@ function drawShadowPass(ctx, cells, tileRadius, originX, originY, state, isSourc
   const { dx, dy } = computeShadowOffset(tileRadius);
   if (dx === 0 && dy === 0) return;  // length 0 = 影なし
   const worldRadius = state.config.worldRadius;
-  const hexSize = tileRadius - 1;  // drawHex と揃える(stroke 用 1px ギャップ)
+  // v1-0b.1.4(フェーズ 56): hexSize を tileRadius にすることで、隣接 shadow 同士が
+  // 辺で完全接続される(以前は tileRadius - 1 で 1px 隙間あり)。pathHexAt は stroke を
+  // 使わないので、隣接 hex の重なりは発生しない(clip 領域がそれぞれ recipient 単位)。
+  const hexSize = tileRadius;
 
   // pixel 位置を pre-compute(同じ cell を source / recipient で 2 度引く可能性があるため)
   const pixelByKey = new Map();
@@ -598,7 +619,7 @@ function drawShadowPass(ctx, cells, tileRadius, originX, originY, state, isSourc
     pixelByKey.set(cell.key(), hexToPixel(drawHexCoord, tileRadius, originX, originY));
   }
 
-  const fillStyle = `rgba(0, 0, 0, ${SHADOW_CONFIG.alpha})`;
+  const fillStyle = `rgba(0, 0, 0, ${RENDER_TUNING.shadow.alpha})`;
 
   for (const sourceCell of cells) {
     if (!isSourceCell(sourceCell)) continue;
@@ -883,37 +904,51 @@ export function updateEnemyStatusBox(state) {
 // canvas の CSS サイズ = clientWidth / clientHeight を返す)。
 // ==============================================================================
 
-function setupCanvasHiDPI(canvas) {
+// ==============================================================================
+// v1-0b.1.3(フェーズ 55、最適化 I): HiDPI セットアップは bootstrap 1 回。
+// 毎フレームの ctx.setTransform は ctx.save/restore のペアが対であれば不要だが、
+// セーフティネットとして保持(コストはほぼゼロ)。
+// ==============================================================================
+
+// canvas attribute(width/height)を DPR 倍に設定する。bootstrap 時に 1 回だけ呼ぶ。
+function setupCanvasHiDPIInternal(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const dprStr = String(dpr);
-
-  // CSS pixel サイズ = HTML attribute 値(初期値 520 など)を信頼する。
+  // CSS pixel サイズ = HTML attribute 値(520 等)を信頼する。
   // canvas.style.width / style.height は設定しない:グローバル CSS の
-  // `canvas { width: 100%; height: auto; }` でレスポンシブが効くため、
-  // style 固定するとレイアウトを壊して iOS / モバイルで描画が出なくなる。
-  // canvas attribute(width/height)だけを DPR 倍にすれば、
-  // intrinsic ratio が保たれ、CSS の auto 計算で正しいサイズに表示される。
+  // `canvas { width: 100%; height: auto; }` でレスポンシブを保つため。
   const baseWidth = parseInt(canvas.getAttribute('width') ?? '0', 10) || 520;
   const baseHeight = parseInt(canvas.getAttribute('height') ?? '0', 10) || 520;
-
   if (canvas.dataset.hidpiDpr !== dprStr) {
     canvas.width = Math.round(baseWidth * dpr);
     canvas.height = Math.round(baseHeight * dpr);
-    // CSS pixel サイズを dataset に保存(getMainViewParams 等から参照)
     canvas.dataset.cssWidth = String(baseWidth);
     canvas.dataset.cssHeight = String(baseHeight);
     canvas.dataset.hidpiDpr = dprStr;
   }
-  // 毎フレーム ctx を CSS pixel 座標系にリセット
-  // (描画途中で save/restore があっても save 時点の transform に戻るので、
-  //  関数の最初に setTransform を明示的に呼んでおくのが安全)
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// bootstrap で呼ぶ:全 canvas を初期化する。
+export function initCanvasHiDPI() {
+  for (const id of ['mainCanvasBG', 'mainCanvasFG', 'subCanvas']) {
+    const canvas = document.getElementById(id);
+    if (canvas) setupCanvasHiDPIInternal(canvas);
+  }
+}
+
+// 各 render 関数冒頭で呼ぶ:ctx の transform を CSS pixel 座標系にリセットする
+// (save/restore のペアが対なら理論上不要だが、セーフティネットとして残置)。
+function resetCanvasTransform(canvas) {
+  const dpr = parseFloat(canvas.dataset.hidpiDpr ?? '1') || 1;
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 function getMainViewParams(canvasId, state) {
   const canvas = document.getElementById(canvasId);
-  setupCanvasHiDPI(canvas);
+  resetCanvasTransform(canvas);
   const ctx = canvas.getContext('2d');
   // CSS pixel 単位で扱う(canvas.width は HiDPI 設定後 dpr 倍されているため使えない)
   const width = parseInt(canvas.dataset.cssWidth ?? '0', 10) || 520;
@@ -1068,9 +1103,9 @@ function drawWorldBoundary(ctx, tileRadius, originX, originY, radius) {
 
 export function renderSub(state) {
   const canvas = document.getElementById('subCanvas');
-  setupCanvasHiDPI(canvas);
+  resetCanvasTransform(canvas);
   const ctx = canvas.getContext('2d');
-  // CSS pixel 単位で扱う(setupCanvasHiDPI 後 canvas.width は dpr 倍されているため使えない)
+  // CSS pixel 単位で扱う(canvas.width は HiDPI 設定後 dpr 倍されているため使えない)
   const width = parseInt(canvas.dataset.cssWidth ?? '0', 10) || 520;
   const height = parseInt(canvas.dataset.cssHeight ?? '0', 10) || 580;
   const originX = width / 2;
@@ -1113,7 +1148,34 @@ export function renderSub(state) {
   drawLabel(ctx, playerPixel.x, playerPixel.y + tileRadius * 2.3, 'player', CONFIG.colors.muted, Math.min(11, tileRadius + 3));
 }
 
+// v1-0b.1.3(フェーズ 55、最適化 G): state 不変フレームの描画スキップ。
+// turn / facing / playerPos / debugOverlay の変化を検出し、変化がなければ skip。
+// HUD やステータスボックスは変化が外から見える要素なので、render 経由でしか
+// 触らない設計。state がそのままなら描画も不要。
+let lastRenderHash = null;
+
+function computeRenderHash(state) {
+  const pos = state.playerPos;
+  return [
+    state.turn,
+    state.previewFacing,
+    state.committedFacing ?? -1,
+    pos ? `${pos.q},${pos.r}` : '',
+    state.debugOverlay ? 1 : 0,
+  ].join('|');
+}
+
+// 強制再描画フラグを立てる。state がそのままでも描画したい場面で使う(現状は未使用、
+// 将来 resize hook 等で必要になる場合のフック)。
+export function invalidateRender() {
+  lastRenderHash = null;
+}
+
 export function render(state) {
+  const hash = computeRenderHash(state);
+  if (hash === lastRenderHash) return;
+  lastRenderHash = hash;
+
   updateStatusBox(state);
   updateEnemyStatusBox(state);
   renderMainBG(state);
