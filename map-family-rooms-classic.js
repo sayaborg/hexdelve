@@ -143,8 +143,13 @@ function addWallRing(cellMap) {
       const neighbor = axialStep(here, h, 1);
       const key = neighbor.key();
       if (cellMap.has(key)) continue;
+      // wall の support は 'blocked' を使う(cave 系と同じ規約)。
+      // map-compile.js の canStandAtHere = (effective.support !== 'blocked') という規則により、
+      // 'blocked' のときだけ canStandAtHere = false となり、プレイヤーが立てない + getTileHeight が
+      // 1 を返して shadow source として認識される。'unstable' では立てる扱いになって
+      // shadow が出ない / プレイヤーが壁にめり込む問題が発生する(フェーズ 54.3 で発見)。
       addCell(cellMap, neighbor, {
-        support: 'unstable',
+        support: 'blocked',
         sightH: 'block',
         sightD: 'block',
         structureKind: 'wall',

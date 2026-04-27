@@ -537,9 +537,10 @@ const SHADOW_CONFIG = RENDER_TUNING.shadow;
 function getTileHeight(cell) {
   const runtime = getRuntimeCell(cell);
   if (!runtime) {
-    // rooms_classic 等で構造化セル外(= void)。描画時 drawVoidSpriteProg が
-    // wall パレットで塗っており、視覚上は wall と同等のため z=+h として扱う。
-    // これがないと rooms_classic family で部屋外周の壁が影を落とさなくなる。
+    // 構造化セル外(= 完全 void)。フェーズ 54.2/54.3 で rooms_classic は wall を
+    // 明示登録するようになったため、通常運用では runtime null になるのは worldRadius 内で
+    // 一切登録されていない極外周のみ。保険として z=+h を返す(将来 wall 未登録の family が
+    // 入っても shadow を落とせるため)。
     return 1;
   }
   // 壁(blocked support): 物理的に立っている → z=+h
