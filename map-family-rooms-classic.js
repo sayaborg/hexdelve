@@ -143,7 +143,7 @@ function resolveStairsInfo(stairsConstraint, rng) {
 // ---- 生成本体 ----
 
 // v1-0b.1.2(フェーズ 54、A-3): rooms_classic family の wall 明示登録。
-// 構造化セル(room / corridor / threshold)群の境界に隣接する 1 層分のセルを
+// 構造化セル(room / corridor)群の境界に隣接する 1 層分のセルを
 // wall として addCell に登録する。これにより:
 //   - getCellSource(wallCell) が non-null を返す(以前は void)
 //   - getTileSprite(wallCell) が kind: 'wall' を返す → wall PNG 経路に乗る
@@ -151,10 +151,18 @@ function resolveStairsInfo(stairsConstraint, rng) {
 //     明示的な wall として z=+h を返す
 // 機能的には canStandAt = false、blocksSightH = block で従来と一致するが、
 // source-of-truth として wall が明示登録される(STATUS §4.7 の負債解消)。
+//
+// v1-0b.1.2 フェーズ 54.1: threshold セルからの隣接展開は除外する。threshold は
+// 閉領域(部屋)と外部(corridor / 隣接部屋)を結ぶ出入口で、その外向き隣接位置に
+// 壁を置くと「ドアを抜けたらすぐ壁で塞がれる」(corridor 0 マスケースで顕在化、
+// rooms_classic の seed によっては threshold 同士が直接隣接して corridor が空になる)。
+// room / corridor からの展開だけで部屋外周の wall は十分カバーされる。
 function addWallRing(cellMap) {
   // 反復中変更を避けるため snapshot を取る
   const snapshot = Array.from(cellMap.values());
   for (const cell of snapshot) {
+    // threshold 起点の隣接展開は skip(出入口の外を塞がないため)
+    if (cell.structureKind === 'threshold') continue;
     const here = new Hex(cell.q, cell.r);
     for (let h = 0; h < 6; h += 1) {
       const neighbor = axialStep(here, h, 1);

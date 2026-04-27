@@ -885,15 +885,22 @@ export function updateEnemyStatusBox(state) {
 function setupCanvasHiDPI(canvas) {
   const dpr = window.devicePixelRatio || 1;
   const dprStr = String(dpr);
-  if (canvas.dataset.hidpiDpr !== dprStr) {
-    // 初回 or DPR 変動時:内部解像度を物理ピクセルに合わせる
-    const cssWidth = canvas.clientWidth || parseInt(canvas.getAttribute('width') ?? '0', 10) || canvas.width;
-    const cssHeight = canvas.clientHeight || parseInt(canvas.getAttribute('height') ?? '0', 10) || canvas.height;
 
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
+  // CSS pixel サイズ = HTML attribute 値(初期値 520 など)を信頼する。
+  // canvas.style.width / style.height は設定しない:グローバル CSS の
+  // `canvas { width: 100%; height: auto; }` でレスポンシブが効くため、
+  // style 固定するとレイアウトを壊して iOS / モバイルで描画が出なくなる。
+  // canvas attribute(width/height)だけを DPR 倍にすれば、
+  // intrinsic ratio が保たれ、CSS の auto 計算で正しいサイズに表示される。
+  const baseWidth = parseInt(canvas.getAttribute('width') ?? '0', 10) || 520;
+  const baseHeight = parseInt(canvas.getAttribute('height') ?? '0', 10) || 520;
+
+  if (canvas.dataset.hidpiDpr !== dprStr) {
+    canvas.width = Math.round(baseWidth * dpr);
+    canvas.height = Math.round(baseHeight * dpr);
+    // CSS pixel サイズを dataset に保存(getMainViewParams 等から参照)
+    canvas.dataset.cssWidth = String(baseWidth);
+    canvas.dataset.cssHeight = String(baseHeight);
     canvas.dataset.hidpiDpr = dprStr;
   }
   // 毎フレーム ctx を CSS pixel 座標系にリセット
@@ -908,8 +915,8 @@ function getMainViewParams(canvasId, state) {
   setupCanvasHiDPI(canvas);
   const ctx = canvas.getContext('2d');
   // CSS pixel 単位で扱う(canvas.width は HiDPI 設定後 dpr 倍されているため使えない)
-  const width = parseFloat(canvas.style.width) || canvas.width;
-  const height = parseFloat(canvas.style.height) || canvas.height;
+  const width = parseInt(canvas.dataset.cssWidth ?? '0', 10) || 520;
+  const height = parseInt(canvas.dataset.cssHeight ?? '0', 10) || 520;
   const originX = width / 2;
   const originY = height / 2;
   const rotationDeg = -90 - HEADING_ANGLES_DEG[state.previewFacing];
@@ -1063,8 +1070,8 @@ export function renderSub(state) {
   setupCanvasHiDPI(canvas);
   const ctx = canvas.getContext('2d');
   // CSS pixel 単位で扱う(setupCanvasHiDPI 後 canvas.width は dpr 倍されているため使えない)
-  const width = parseFloat(canvas.style.width) || canvas.width;
-  const height = parseFloat(canvas.style.height) || canvas.height;
+  const width = parseInt(canvas.dataset.cssWidth ?? '0', 10) || 520;
+  const height = parseInt(canvas.dataset.cssHeight ?? '0', 10) || 580;
   const originX = width / 2;
   const originY = height / 2;
   const tileRadius = CONFIG.sub.tileRadius;
