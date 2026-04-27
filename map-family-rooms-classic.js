@@ -3,6 +3,38 @@ import { EDGE_DIRECTIONS, Hex, hexDistance, isInsideWorld, oppositeHeading } fro
 import { createRng } from './rng.js';
 import { selectEnemiesWithMinDistanceRelaxation } from './map-spawn.js';
 
+// ==============================================================================
+// rooms_classic family — v1-0b.1.2 フェーズ 54.2 で全面再設計
+// ==============================================================================
+//
+// 構造化された手順で source map を組み立てる:
+//
+//   1. 部屋の内側を floor(structureKind: 'room')で塗り潰す
+//   2. 中心部屋 ↔ 各外部屋を corridor で繋ぐ
+//      - 各部屋の出入口に threshold(structureKind: 'threshold')を 1 マス置く
+//      - threshold 同士を corridor(structureKind: 'corridor')で直線接続
+//      - corridor 長は両部屋の幾何で必ず ≥ 1 マスになるよう中心間距離を確保
+//   3. 全構造化セル(room / corridor / threshold)の 6 隣接で
+//      未登録のセルを wall(structureKind: 'wall')で囲む
+//
+// 幾何(中心部屋 (0,0) 半径 2、外部屋 (0, -9) heading=0 半径 2 の例):
+//
+//          外部屋 (0,-9) 中心
+//   外部屋外周(distance 2): (0,-7) .. (0,-11) など
+//   外部屋 threshold:        (0,-6)  ← 外部屋外周の 1 マス内側ではなく外側
+//   corridor:                (0,-5), (0,-4)  ← 2 マス
+//   中心部屋 threshold:       (0,-3)
+//   中心部屋外周(distance 2): (0,-2)
+//          中心部屋 (0,0)
+//
+// ※ threshold は **部屋の一部ではなく corridor の端**。room 外周(distance ≤ 2)
+//   の 1 マス外側に配置することで、threshold 自身も corridor として通行可能にする。
+//   threshold には door feature を載せられる(closed / locked / open)。
+//
+// ※ 中心部屋から各外部屋への heading は 0/2/4(roomCount=4)or 0/3(roomCount=3)。
+//   各外部屋の中心 = axialStep(中心部屋, heading, 9)。
+// ==============================================================================
+
 // ---- 幾何ヘルパ ----
 
 function axialStep(hex, heading, steps = 1) {
@@ -13,25 +45,21 @@ function axialStep(hex, heading, steps = 1) {
   return current;
 }
 
+// addCell:cellMap に entry を追加 / patch する。
+// prev デフォルトは付けない(明示的に structureKind を指定して呼ぶ前提)。
 function addCell(cellMap, hex, patch) {
   if (!isInsideWorld(hex, CONFIG.worldRadius)) return;
   const key = hex.key();
-  const prev = cellMap.get(key) ?? {
-    q: hex.q,
-    r: hex.r,
-    support: 'stable',
-    sightH: 'pass',
-    sightD: 'block',
-    structureKind: 'room',
-    feature: null,
-    meta: {},
-  };
+  const prev = cellMap.get(key);
   cellMap.set(key, {
-    ...prev,
-    ...patch,
     q: hex.q,
     r: hex.r,
-    meta: { ...(prev.meta ?? {}), ...(patch.meta ?? {}) },
+    support: patch.support ?? prev?.support ?? 'stable',
+    sightH: patch.sightH ?? prev?.sightH ?? 'pass',
+    sightD: patch.sightD ?? prev?.sightD ?? 'block',
+    structureKind: patch.structureKind ?? prev?.structureKind ?? 'room',
+    feature: patch.feature ?? prev?.feature ?? null,
+    meta: { ...(prev?.meta ?? {}), ...(patch.meta ?? {}) },
   });
 }
 
@@ -44,12 +72,90 @@ function addRoomDisk(cellMap, center, radius, roomId) {
         sightH: 'pass',
         sightD: 'block',
         structureKind: 'room',
+        feature: null,
         meta: { roomId },
       });
     }
   }
 }
 
+// 部屋同士を corridor で繋ぐ。
+//   roomCenter1 → 部屋 1 中心、heading で部屋 2 へ向かう
+//   roomRadius:両部屋とも同じ半径(本 generator では 2 固定)
+//
+// 配置:
+//   - threshold1 = roomCenter1 から heading 方向に (roomRadius + 1) ステップ
+//     例: 中心 (0,0) 半径 2 → threshold1 = (0,-3)
+//   - threshold2 = roomCenter2 から oppositeHeading 方向に (roomRadius + 1) ステップ
+//   - threshold1 と threshold2 の間を corridor で直線接続
+//
+// corridorId は呼び出し側から与える。
+function connectRoomsWithCorridor(cellMap, roomCenter1, roomCenter2, heading, roomRadius, corridorId) {
+  const threshold1 = axialStep(roomCenter1, heading, roomRadius + 1);
+  const threshold2 = axialStep(roomCenter2, oppositeHeading(heading), roomRadius + 1);
+
+  // threshold を登録(door feature は呼び出し側で重ね描く)
+  addCell(cellMap, threshold1, {
+    support: 'stable',
+    sightH: 'pass',
+    sightD: 'block',
+    structureKind: 'threshold',
+    feature: null,
+    meta: { corridorId, side: 'near' },
+  });
+  addCell(cellMap, threshold2, {
+    support: 'stable',
+    sightH: 'pass',
+    sightD: 'block',
+    structureKind: 'threshold',
+    feature: null,
+    meta: { corridorId, side: 'far' },
+  });
+
+  // threshold1 から heading 方向に進み、threshold2 までを corridor で埋める
+  // (threshold1 の次のセルから threshold2 の手前まで)
+  let current = axialStep(threshold1, heading, 1);
+  while (!current.equals(threshold2)) {
+    addCell(cellMap, current, {
+      support: 'stable',
+      sightH: 'pass',
+      sightD: 'block',
+      structureKind: 'corridor',
+      feature: null,
+      meta: { corridorId },
+    });
+    current = axialStep(current, heading, 1);
+  }
+
+  return { threshold1, threshold2 };
+}
+
+// 全構造化セル(room / corridor / threshold)の 6 隣接で未登録のセルを wall として埋める。
+// threshold 起点も含めて OK:新仕様では threshold の外向きも必ず corridor or room なので、
+// wall になる位置は room/corridor/threshold が既に占有していて自然に skip される。
+// (旧設計では entry/exit threshold が 1 マスで隣接 = corridor 0 マスケースが起こり、
+//  threshold の外向き隣接に wall ができてしまっていた。新設計では幾何的に発生しない。)
+function addWallRing(cellMap) {
+  const snapshot = Array.from(cellMap.values());
+  for (const cell of snapshot) {
+    const here = new Hex(cell.q, cell.r);
+    for (let h = 0; h < 6; h += 1) {
+      const neighbor = axialStep(here, h, 1);
+      const key = neighbor.key();
+      if (cellMap.has(key)) continue;
+      addCell(cellMap, neighbor, {
+        support: 'unstable',
+        sightH: 'block',
+        sightD: 'block',
+        structureKind: 'wall',
+        feature: null,
+        meta: {},
+      });
+    }
+  }
+}
+
+// 進行先方向のヒューリスティック(敵の facing 決定用)
 function chooseFacingToward(from, to) {
   let bestHeading = 0;
   let bestDistance = Infinity;
@@ -64,7 +170,7 @@ function chooseFacingToward(from, to) {
   return bestHeading;
 }
 
-// ---- 敵 spawn 候補選定 ----
+// ---- 敵 spawn 候補選定(SPEC §11.3) ----
 
 function collectRoomFloorCells(cellMap, rooms, reserved) {
   const candidates = [];
@@ -80,9 +186,6 @@ function collectRoomFloorCells(cellMap, rooms, reserved) {
 }
 
 function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
-  // 仕様(SPEC §11.3): 3〜5 体、プレイヤー初期位置から hexDistance >= 5、
-  // 敵同士 hexDistance >= 6(段階的緩和つき、CHANGELOG フェーズ 49)。
-  // wt は watcher の wtRange から乱数で決定、以降個体固定。
   const count = rng.int(3, 5);
   const watcherKind = CONFIG.enemyKinds.watcher;
   const [wtMin, wtMax] = watcherKind.wtRange;
@@ -96,8 +199,6 @@ function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
     .filter((entry) => entry.dist >= 5)
     .sort((a, b) => b.dist - a.dist);
 
-  // shuffle 結果を緩和ループの全段階で再利用するため、ここで 1 回だけ shuffle する
-  // (SPEC §11.3 の「配置順の決定論」規約)。
   const orderedCandidates = rng.shuffle(ranked).map((entry) => ({
     q: entry.cell.q,
     r: entry.cell.r,
@@ -116,9 +217,6 @@ function chooseEnemies(rooms, cellMap, startCenter, rng, stairsHex = null) {
 
 // ---- 階段配置 ----
 
-// 階段情報を決定する。
-//   stairsConstraint あり(フロア遷移時): 指定の (q, r), enterHeading, verticalMode を強制
-//   stairsConstraint なし(初期フロア):    (0, -1) 固定、enterHeading=0 (N)、verticalMode は乱数
 function resolveStairsInfo(stairsConstraint, rng) {
   if (stairsConstraint) {
     return {
@@ -142,80 +240,47 @@ function resolveStairsInfo(stairsConstraint, rng) {
 
 // ---- 生成本体 ----
 
-// v1-0b.1.2(フェーズ 54、A-3): rooms_classic family の wall 明示登録。
-// 構造化セル(room / corridor)群の境界に隣接する 1 層分のセルを
-// wall として addCell に登録する。これにより:
-//   - getCellSource(wallCell) が non-null を返す(以前は void)
-//   - getTileSprite(wallCell) が kind: 'wall' を返す → wall PNG 経路に乗る
-//   - shadow pass の getTileHeight が runtime null フォールバックではなく
-//     明示的な wall として z=+h を返す
-// 機能的には canStandAt = false、blocksSightH = block で従来と一致するが、
-// source-of-truth として wall が明示登録される(STATUS §4.7 の負債解消)。
-//
-// v1-0b.1.2 フェーズ 54.1: threshold セルからの隣接展開は除外する。threshold は
-// 閉領域(部屋)と外部(corridor / 隣接部屋)を結ぶ出入口で、その外向き隣接位置に
-// 壁を置くと「ドアを抜けたらすぐ壁で塞がれる」(corridor 0 マスケースで顕在化、
-// rooms_classic の seed によっては threshold 同士が直接隣接して corridor が空になる)。
-// room / corridor からの展開だけで部屋外周の wall は十分カバーされる。
-function addWallRing(cellMap) {
-  // 反復中変更を避けるため snapshot を取る
-  const snapshot = Array.from(cellMap.values());
-  for (const cell of snapshot) {
-    // threshold 起点の隣接展開は skip(出入口の外を塞がないため)
-    if (cell.structureKind === 'threshold') continue;
-    const here = new Hex(cell.q, cell.r);
-    for (let h = 0; h < 6; h += 1) {
-      const neighbor = axialStep(here, h, 1);
-      const key = neighbor.key();
-      if (cellMap.has(key)) continue;  // 既に登録済(構造化セル)はスキップ
-      // wall として登録(unstable / sight block 両方向)
-      addCell(cellMap, neighbor, {
-        support: 'unstable',
-        sightH: 'block',
-        sightD: 'block',
-        structureKind: 'wall',
-        feature: null,
-        meta: {},
-      });
-    }
-  }
-}
+const ROOM_RADIUS = 2;       // 各部屋の hex disk 半径
+const ROOM_DISTANCE = 9;     // 中心部屋 ↔ 外部屋の中心間距離(corridor 2 マスを確保)
 
 export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = null, params = {}, stairsConstraint = null } = {}) {
   const localRng = rng ?? createRng(params.seed ?? 20260419);
   const cellMap = new Map();
   const roomCount = localRng.chance(0.5) ? 3 : 4;
 
-  // 階段情報を先に確定させる(centerRoom の位置決めに使う)
+  // 階段情報を先に確定(centerRoom の位置決めに使う)
   const stairsInfo = resolveStairsInfo(stairsConstraint, localRng);
 
-  // centerRoom.center:
+  // 中心部屋:
   //   stairsConstraint あり → 階段位置に中心部屋を寄せる(プレイヤーは階段 exitHeading 隣接で spawn)
   //   stairsConstraint なし → (0, 0)(プレイヤーは (0, 0) spawn、階段は (0, -1))
   const centerRoomCenter = stairsConstraint
     ? new Hex(stairsInfo.q, stairsInfo.r)
     : new Hex(0, 0);
-  const centerRoom = { id: 'r1', center: centerRoomCenter, radius: 2 };
+  const centerRoom = { id: 'r1', center: centerRoomCenter, radius: ROOM_RADIUS };
 
+  // 外部屋の方向(roomCount で決定)
   const outerHeadings = roomCount === 3 ? [0, 3] : [0, 2, 4];
+
+  // 部屋を作る:中心 + 各外部屋
   const rooms = [centerRoom];
   outerHeadings.forEach((heading, index) => {
     rooms.push({
       id: `r${index + 2}`,
-      center: axialStep(centerRoom.center, heading, 7),
-      radius: 2,
+      center: axialStep(centerRoom.center, heading, ROOM_DISTANCE),
+      radius: ROOM_RADIUS,
       heading,
     });
   });
 
-  for (const room of rooms) addRoomDisk(cellMap, room.center, room.radius, room.id);
+  // (1) 部屋の内側を floor で塗り潰す
+  for (const room of rooms) {
+    addRoomDisk(cellMap, room.center, room.radius, room.id);
+  }
 
-  // 階段を中心部屋内の該当タイルに配置(既に room として addCell されているので、feature を重ねる)
+  // 中心部屋に階段 feature を載せる(addRoomDisk 後なので room の上に重ねる)
   const stairsHex = new Hex(stairsInfo.q, stairsInfo.r);
   addCell(cellMap, stairsHex, {
-    support: 'stable',
-    sightH: 'pass',
-    sightD: 'block',
     structureKind: 'room',
     feature: {
       kind: 'stairs',
@@ -229,58 +294,51 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
     meta: { roomId: centerRoom.id },
   });
 
+  // (2) 中心部屋 ↔ 各外部屋を corridor で繋ぐ
   // v0 動作確認用: 外部屋のうち 1 つの出口を closed ドア、もう 1 つを locked ドアにする。
   // 3 部屋(外 2 つ)なら 1 つずつ、4 部屋(外 3 つ)なら 1 つは扉なし。
   const outerRooms = rooms.slice(1);
   const closedDoorRoomId = outerRooms[0]?.id ?? null;
   const lockedDoorRoomId = outerRooms[1]?.id ?? null;
 
-  for (const room of rooms.slice(1)) {
-    const entry = axialStep(centerRoom.center, room.heading, 3);
-    const exit = axialStep(room.center, (room.heading + 3) % 6, 3);
-
-    let current = entry.add(EDGE_DIRECTIONS[room.heading]);
-    while (!current.equals(exit)) {
-      addCell(cellMap, current, {
-        support: 'stable',
-        sightH: 'pass',
-        sightD: 'block',
-        structureKind: 'corridor',
-        meta: { corridorId: `c_${centerRoom.id}_${room.id}` },
-      });
-      current = current.add(EDGE_DIRECTIONS[room.heading]);
-    }
-
-    // threshold の source support は常に stable(GLOSSARY §5, SPEC §6.2)。
-    // closed/locked の effective 降格は resolve が担当する。
-    addCell(cellMap, entry, {
-      support: 'stable',
-      sightH: 'pass',
-      sightD: 'block',
-      structureKind: 'threshold',
-      feature: null,
-      meta: { roomId: centerRoom.id },
-    });
-
+  for (const room of outerRooms) {
+    const corridorId = `c_${centerRoom.id}_${room.id}`;
+    const { threshold1: nearThreshold, threshold2: farThreshold } = connectRoomsWithCorridor(
+      cellMap,
+      centerRoom.center,
+      room.center,
+      room.heading,
+      ROOM_RADIUS,
+      corridorId,
+    );
+    // 外部屋側の threshold(threshold2 = farThreshold)に door を配置する
     let doorState = null;
     if (room.id === closedDoorRoomId) doorState = 'closed';
     else if (room.id === lockedDoorRoomId) doorState = 'locked';
-
-    addCell(cellMap, exit, {
-      support: 'stable',
-      sightH: 'pass',
-      sightD: 'block',
-      structureKind: 'threshold',
-      feature: doorState ? { kind: 'door', state: doorState, params: {} } : null,
-      meta: { roomId: room.id },
+    if (doorState) {
+      addCell(cellMap, farThreshold, {
+        structureKind: 'threshold',
+        feature: { kind: 'door', state: doorState, params: {} },
+        meta: { corridorId, roomId: room.id, side: 'far' },
+      });
+    } else {
+      // ドアなし threshold には roomId メタを付ける(meta 整理のため)
+      addCell(cellMap, farThreshold, {
+        meta: { corridorId, roomId: room.id, side: 'far' },
+      });
+    }
+    // 中心側 threshold(threshold1 = nearThreshold)も roomId を中心に紐付け
+    addCell(cellMap, nearThreshold, {
+      meta: { corridorId, roomId: centerRoom.id, side: 'near' },
     });
   }
 
-  // プレイヤー初期位置を決定
+  // (3) 全構造化セルの 6 隣接で未登録のセルを wall で囲む
+  addWallRing(cellMap);
+
+  // プレイヤー初期位置
   //   初期フロア: centerRoom.center (= (0, 0))、facing = 0
   //   フロア遷移: 階段の「開口部側」= opposite(enterHeading) 方向隣接タイルに spawn。
-  //              facing は旧フロアでの進行方向(= 旧 exitHeading)を維持 =
-  //              新 enterHeading の opposite。
   let playerStart;
   if (stairsConstraint) {
     const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
@@ -293,10 +351,6 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   } else {
     playerStart = { q: centerRoom.center.q, r: centerRoom.center.r, facing: 0 };
   }
-
-  // v1-0b.1.2(フェーズ 54、A-3): 構造化セル全部の登録が終わった段階で wall 1 層を追加。
-  // chooseEnemies は room cell のみを候補にするため、wall 追加は enemy 配置に影響しない。
-  addWallRing(cellMap);
 
   const cells = Array.from(cellMap.values());
   const enemies = chooseEnemies(rooms, cellMap, new Hex(playerStart.q, playerStart.r), localRng, stairsHex);
