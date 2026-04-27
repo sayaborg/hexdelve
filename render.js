@@ -1,4 +1,4 @@
-import { CONFIG } from './config.js';
+import { CONFIG, RENDER_TUNING } from './config.js';
 import {
   HEADING_ANGLES_DEG,
   HEADING_LABELS,
@@ -530,11 +530,9 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
 //   getTileHeight(cell) を v1+ で柱・障害物・unstable など追加した時の単一フック点とする。
 // ==============================================================================
 
-const SHADOW_CONFIG = {
-  angleDeg: 0,        // N=0、時計回り
-  lengthRatio: 0.25,  // タイル直径(2 × tileRadius)に対する比率
-  alpha: 0.32,
-};
+// v1-0b.1.2(フェーズ 54、A-2): 値は config.js の RENDER_TUNING.shadow に集約。
+// この const は後方互換のため残し、RENDER_TUNING を再 export する形で参照を集中させる。
+const SHADOW_CONFIG = RENDER_TUNING.shadow;
 
 function getTileHeight(cell) {
   const runtime = getRuntimeCell(cell);
@@ -867,11 +865,51 @@ export function updateEnemyStatusBox(state) {
 // world 回転は両方のキャンバスに同じ方向・同じ量で適用する。
 // ==============================================================================
 
+// ==============================================================================
+// v1-0b.1.2(フェーズ 54): HiDPI 対応
+// ==============================================================================
+//
+// 高解像度ディスプレイ(iPhone Retina の DPR=2〜3、PC の DPR=1.25〜2)で
+// canvas が滲まないように、内部解像度(canvas.width / canvas.height)を
+// CSS pixel × devicePixelRatio に設定し、ctx.scale(dpr, dpr) で描画コードを
+// CSS pixel 単位に保つ。
+//
+// idempotent:同じ DPR で再設定しないように canvas.dataset.hidpiDpr で記録。
+// resize 時は dataset を消して再呼び出し(現状の実装では resize hook 未設置)。
+//
+// 描画コードは CSS pixel 単位のままなので、render.js 内部の座標計算は変更不要。
+// originX / originY / tileRadius すべて CSS pixel 単位で扱う(getMainViewParams が
+// canvas の CSS サイズ = clientWidth / clientHeight を返す)。
+// ==============================================================================
+
+function setupCanvasHiDPI(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const dprStr = String(dpr);
+  if (canvas.dataset.hidpiDpr !== dprStr) {
+    // 初回 or DPR 変動時:内部解像度を物理ピクセルに合わせる
+    const cssWidth = canvas.clientWidth || parseInt(canvas.getAttribute('width') ?? '0', 10) || canvas.width;
+    const cssHeight = canvas.clientHeight || parseInt(canvas.getAttribute('height') ?? '0', 10) || canvas.height;
+
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.dataset.hidpiDpr = dprStr;
+  }
+  // 毎フレーム ctx を CSS pixel 座標系にリセット
+  // (描画途中で save/restore があっても save 時点の transform に戻るので、
+  //  関数の最初に setTransform を明示的に呼んでおくのが安全)
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
 function getMainViewParams(canvasId, state) {
   const canvas = document.getElementById(canvasId);
+  setupCanvasHiDPI(canvas);
   const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
+  // CSS pixel 単位で扱う(canvas.width は HiDPI 設定後 dpr 倍されているため使えない)
+  const width = parseFloat(canvas.style.width) || canvas.width;
+  const height = parseFloat(canvas.style.height) || canvas.height;
   const originX = width / 2;
   const originY = height / 2;
   const rotationDeg = -90 - HEADING_ANGLES_DEG[state.previewFacing];
@@ -1022,9 +1060,11 @@ function drawWorldBoundary(ctx, tileRadius, originX, originY, radius) {
 
 export function renderSub(state) {
   const canvas = document.getElementById('subCanvas');
+  setupCanvasHiDPI(canvas);
   const ctx = canvas.getContext('2d');
-  const width = canvas.width;
-  const height = canvas.height;
+  // CSS pixel 単位で扱う(setupCanvasHiDPI 後 canvas.width は dpr 倍されているため使えない)
+  const width = parseFloat(canvas.style.width) || canvas.width;
+  const height = parseFloat(canvas.style.height) || canvas.height;
   const originX = width / 2;
   const originY = height / 2;
   const tileRadius = CONFIG.sub.tileRadius;

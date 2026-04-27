@@ -95,10 +95,11 @@ canvas {
   pointer-events: none;
   /* v1-0b.1.1:視界外(explored だが現在 FOV 外)タイルを「ぼやけて見える」状態で表現。
      ラッパー div に filter を適用することで iOS Safari でも canvas 内容にぼかしがかかる。
-     CSS filter は iOS 9.0+ で動作。blur 量は実機で要チューニング(v1-0b.3 課題)。
-     v1-0b.1.1 フェーズ 53.2: `transform: translateZ(0)` は WebKit で filter と組み合わせると
-     合成パスが分離してレンダリングバグの原因になる場合があるため除去。 */
-  filter: blur(2px);
+     CSS filter は iOS 9.0+ で動作。
+     v1-0b.1.2(フェーズ 54、A-2): blur 量を CSS 変数経由にし、bootstrap で
+     RENDER_TUNING.blur.mainBgPx を `--main-blur` に書き出す。フォールバックは 2px。
+     blur 量は実機で要チューニング(v1-0b.3 課題、PC vs iOS の差異も論点 P)。 */
+  filter: blur(var(--main-blur, 2px));
 }
 
 .canvas-bg-layer canvas {

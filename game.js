@@ -1,4 +1,4 @@
-import { CONFIG, LOCAL_MOVE_LABELS } from './config.js';
+import { CONFIG, LOCAL_MOVE_LABELS, RENDER_TUNING } from './config.js';
 import { Hex, cloneHex, HEADING_LABELS, EDGE_DIRECTIONS, getNeighbor, oppositeHeading } from './hex.js';
 import { allWorldCells, canStandAt, getFeature, setDoorState, setCurrentMapData } from './map.js';
 import { createRng } from './rng.js';
@@ -742,10 +742,14 @@ function bootstrap() {
   });
   setupMapUi();
 
+  // v1-0b.1.2(フェーズ 54、A-2): RENDER_TUNING.blur.mainBgPx を CSS 変数 --main-blur に書き出す。
+  // .canvas-bg-layer の filter: blur(var(--main-blur, 2px)) が参照する。
+  document.documentElement.style.setProperty('--main-blur', `${RENDER_TUNING.blur.mainBgPx}px`);
+
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.2 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
 
   // v1-0b.1(CHANGELOG フェーズ 51): スプライトプリロード。
   // 非同期に投入し、完了時に再 render する(progressive enhancement)。

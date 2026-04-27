@@ -124,4 +124,25 @@ export const CONFIG = {
   },
 };
 
+// v1-0b.1.2(フェーズ 54、A-2): 描画チューニング値の集約。
+// shadow pass / blur 量など、実機で要調整の数値を一箇所に置く。
+// CSS の blur は --main-blur 経由(bootstrap で setProperty で書き出し)。
+export const RENDER_TUNING = {
+  shadow: {
+    // shadow pass(z=+h ブロックの hex 投影)
+    // angleDeg: 影の方向。N=0°、E=90°、時計回り(画面座標と同じ規則)
+    // lengthRatio: タイル直径(2 × tileRadius)に対する変位長
+    // alpha: 影の不透明度
+    angleDeg: 0,
+    lengthRatio: 0.25,
+    alpha: 0.32,
+  },
+  blur: {
+    // 主画面 BG canvas の CSS filter blur 量(px)。
+    // bootstrap で document.documentElement.style.setProperty('--main-blur', `${value}px`) と書き出す。
+    // PC(DPR=1)と iOS(DPR=2〜3)で見え方が異なるため、最終チューニングは v1-0b.3。
+    mainBgPx: 2,
+  },
+};
+
 export const LOCAL_MOVE_LABELS = ['前', '右前', '右後', '後', '左後', '左前'];

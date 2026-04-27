@@ -142,6 +142,37 @@ function resolveStairsInfo(stairsConstraint, rng) {
 
 // ---- 生成本体 ----
 
+// v1-0b.1.2(フェーズ 54、A-3): rooms_classic family の wall 明示登録。
+// 構造化セル(room / corridor / threshold)群の境界に隣接する 1 層分のセルを
+// wall として addCell に登録する。これにより:
+//   - getCellSource(wallCell) が non-null を返す(以前は void)
+//   - getTileSprite(wallCell) が kind: 'wall' を返す → wall PNG 経路に乗る
+//   - shadow pass の getTileHeight が runtime null フォールバックではなく
+//     明示的な wall として z=+h を返す
+// 機能的には canStandAt = false、blocksSightH = block で従来と一致するが、
+// source-of-truth として wall が明示登録される(STATUS §4.7 の負債解消)。
+function addWallRing(cellMap) {
+  // 反復中変更を避けるため snapshot を取る
+  const snapshot = Array.from(cellMap.values());
+  for (const cell of snapshot) {
+    const here = new Hex(cell.q, cell.r);
+    for (let h = 0; h < 6; h += 1) {
+      const neighbor = axialStep(here, h, 1);
+      const key = neighbor.key();
+      if (cellMap.has(key)) continue;  // 既に登録済(構造化セル)はスキップ
+      // wall として登録(unstable / sight block 両方向)
+      addCell(cellMap, neighbor, {
+        support: 'unstable',
+        sightH: 'block',
+        sightD: 'block',
+        structureKind: 'wall',
+        feature: null,
+        meta: {},
+      });
+    }
+  }
+}
+
 export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = null, params = {}, stairsConstraint = null } = {}) {
   const localRng = rng ?? createRng(params.seed ?? 20260419);
   const cellMap = new Map();
@@ -254,6 +285,10 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   } else {
     playerStart = { q: centerRoom.center.q, r: centerRoom.center.r, facing: 0 };
   }
+
+  // v1-0b.1.2(フェーズ 54、A-3): 構造化セル全部の登録が終わった段階で wall 1 層を追加。
+  // chooseEnemies は room cell のみを候補にするため、wall 追加は enemy 配置に影響しない。
+  addWallRing(cellMap);
 
   const cells = Array.from(cellMap.values());
   const enemies = chooseEnemies(rooms, cellMap, new Hex(playerStart.q, playerStart.r), localRng, stairsHex);
