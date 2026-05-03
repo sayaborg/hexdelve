@@ -2,21 +2,19 @@
 // 実行: `node smoke-render.mjs`
 //
 // 目的:
-//   - SPRITE_MANIFEST が 21 アセット相当を網羅していることを確認(A)
 //   - PNG が 1 枚も配置されていない状態で preloadAllSprites() が reject せず resolve(A,B)
 //   - getSpriteAsset() が欠損時に null を返すこと(B)
 //   - getAssetStats() の戻り値構造が preloadAllSprites の戻り値と一致(C)
 //   - 一部の PNG が成功した状態で preloadAllSprites() の ok カウントと
 //     getSpriteAsset() の非 null 返却が連動すること(D、フェーズ 53.5 で追加)
+//   - v1-0b.1.7(フェーズ 59): variant 数の動的検出(連番途切れまでロード)
 //
 // browser API(Image)を Node 上で stub する。stub の挙動はモジュールレベルの
 // `imageMode` 変数で切り替え可能。
-//   'all-fail'    : 全リクエストを 404 相当(onerror)で resolve させる
-//   'rooms-only'  : URL に 'room_' を含むものだけ onload、他は onerror
+//   'all-fail'         : 全リクエストを 404 相当(onerror)で resolve
+//   'rooms-only-2var'  : URL に '/room_0' or '/room_1' を含むものだけ onload(動的検出のテスト)
 //
-// 主画面の実描画は canvas 2D context が必要なため本テストでは検証しない
-// (SPRITE_DRAWERS_PNG / drawSpriteImage は internal だが、その前段の
-// asset-loader 出力を検証することで「drawImage 経路に入る前提」までは保証する)。
+// 主画面の実描画は canvas 2D context が必要なため本テストでは検証しない。
 
 // ----- Image stub -----
 
@@ -29,12 +27,14 @@ class StubImage {
   }
   set src(url) {
     queueMicrotask(() => {
-      const success =
-        imageMode === 'rooms-only' && typeof url === 'string' && /\/room_/.test(url);
+      let success = false;
+      if (typeof url === 'string') {
+        if (imageMode === 'rooms-only-2var') {
+          // room_0.png と room_1.png のみ成功(動的検出で variantCount=2 になることを確認)
+          success = /\/room_0\.png$/.test(url) || /\/room_1\.png$/.test(url);
+        }
+      }
       if (success) {
-        // onload ハンドラには「画像っぽい」オブジェクトとして this を渡す。
-        // asset-loader の loadImage は img オブジェクトをそのまま cache に入れるため、
-        // truthy であれば後段の getSpriteAsset() が非 null を返す。
         if (this.onload) this.onload();
       } else {
         if (this.onerror) this.onerror();
@@ -83,17 +83,23 @@ if (preloadResult) {
     `戻り値に total フィールドが存在`);
   assert(typeof preloadResult.ok === 'number',
     `戻り値に ok フィールドが存在`);
-  assert(preloadResult.total === 21,
-    `manifest 総数が 21(got ${preloadResult.total})。room/corridor/threshold/wall × 4 + door × 3 + stairs × 2 = 21`);
   assert(preloadResult.ok === 0,
     `全 404 状態で ok 数は 0(got ${preloadResult.ok})`);
+  // 動的検出方式: variant ベース 8 種(room/wall + cave_walk_room/wall + cave_natural_room/wall + corridor/threshold)
+  // それぞれ {kind}_0.png で 1 回 404 を踏む = 8 回。state ベースは door 3 + stairs 2 = 5 回。
+  // 合計 13 回の試行(全部 404)。
+  assert(preloadResult.total === 13,
+    `動的検出: 全 kind が 1 枚も無いとき total は variant 8 + state 5 = 13(got ${preloadResult.total})`);
+  // byKind が Map で返ること
+  assert(preloadResult.byKind instanceof Map,
+    `戻り値に byKind: Map が存在(debug 用)`);
 }
 console.log();
 
 // Test B: getSpriteAsset は欠損時に null を返す
 console.log('--- B. getSpriteAsset null behavior (all-fail mode) ---');
 assert(getSpriteAsset('room', null, 0) === null,
-  'getSpriteAsset(room, null, 0) は null(404 後)');
+  'getSpriteAsset(room, null, 0) は null(404 後、loadedVariantCounts[room] = 0)');
 assert(getSpriteAsset('corridor', null, 1) === null,
   'getSpriteAsset(corridor, null, 1) は null');
 assert(getSpriteAsset('door', 'closed', 0) === null,
@@ -109,7 +115,7 @@ assert(getSpriteAsset('stairs', 'down', 0) === null,
 assert(getSpriteAsset('nonexistent_kind', null, 0) === null,
   'getSpriteAsset で未知 kind は null(SPRITE_MANIFEST 未登録)');
 assert(getSpriteAsset('room', null, 99) === null,
-  'getSpriteAsset で範囲外 variant は modulo されて参照(99 % 4 = 3 → null)');
+  'getSpriteAsset で範囲外 variant は loaded=0 なので null');
 console.log();
 
 // Test C: getAssetStats と preloadAllSprites の戻り値構造一致
@@ -117,39 +123,47 @@ console.log('--- C. getAssetStats vs preloadAllSprites 用語統一 ---');
 const stats = getAssetStats();
 assert(typeof stats.total === 'number', 'getAssetStats に total フィールド');
 assert(typeof stats.ok === 'number', 'getAssetStats に ok フィールド({total, ok} 構造)');
-assert(stats.total === 21, `getAssetStats.total === 21(got ${stats.total})`);
+// v1-0b.1.7 から getAssetStats は「キャッシュに登録された成功エントリ数」を返す(全 404 時は 0)
+assert(stats.total === 0, `getAssetStats.total === 0(全 404、got ${stats.total})`);
 assert(stats.ok === 0, `getAssetStats.ok === 0 全 404 後(got ${stats.ok})`);
-assert(!('loaded' in stats),
-  'getAssetStats に loaded フィールドが残っていない(用語統一)');
 console.log();
 
-// Test D: PNG 一部成功経路(フェーズ 53.5 で追加)
-// stub の挙動を URL 判定型に切り替え、room の 4 variant だけ onload、他は onerror。
-// 同じ assetCache を再書き込み(preloadAllSprites は毎回全 manifest を set し直す実装)。
-console.log('--- D. PNG 部分成功経路(rooms-only mode) ---');
-imageMode = 'rooms-only';
+// Test D: PNG 一部成功経路 + 動的 variant 検出(フェーズ 53.5 追加、フェーズ 59 で動的化対応)
+// stub を 'rooms-only-2var' にして room_0.png と room_1.png だけ成功させる。
+// 動的検出が「連番 0,1 まで成功 → 2 で 404 → variantCount=2 で打ち切り」を検証。
+console.log('--- D. PNG 部分成功経路 + 動的 variant 検出(rooms-only-2var mode) ---');
+imageMode = 'rooms-only-2var';
 const partialResult = await preloadAllSprites();
-assert(partialResult.total === 21, `total === 21 維持(got ${partialResult.total})`);
-assert(partialResult.ok === 4,
-  `room の 4 variant のみ成功 → ok === 4(got ${partialResult.ok})`);
 
-// room は全 variant が非 null になる
+// 成功数:room_0, room_1 の 2 枚のみ
+assert(partialResult.ok === 2,
+  `room の 2 variant のみ成功 → ok === 2(got ${partialResult.ok})`);
+
+// byKind で room=2 が確認できる
+assert(partialResult.byKind.get('room') === 2,
+  `byKind.get('room') === 2(動的検出で 2 variant 確定、got ${partialResult.byKind.get('room')})`);
+// 他の variant ベース kind は 0
+assert(partialResult.byKind.get('wall') === 0,
+  `byKind.get('wall') === 0(全 404)`);
+assert(partialResult.byKind.get('corridor') === 0,
+  `byKind.get('corridor') === 0(全 404)`);
+
+// room の variant 0, 1 は非 null
 assert(getSpriteAsset('room', null, 0) !== null,
-  'getSpriteAsset(room, null, 0) は非 null(rooms-only 成功)');
+  'getSpriteAsset(room, null, 0) は非 null');
 assert(getSpriteAsset('room', null, 1) !== null,
   'getSpriteAsset(room, null, 1) は非 null');
-assert(getSpriteAsset('room', null, 2) !== null,
-  'getSpriteAsset(room, null, 2) は非 null');
-assert(getSpriteAsset('room', null, 3) !== null,
-  'getSpriteAsset(room, null, 3) は非 null');
 
-// modulo 確認: variant 99 → 99 % 4 = 3 → 非 null
+// modulo 確認: variant 99 → 99 % 2 = 1 → 非 null(room_1 を引く)
 assert(getSpriteAsset('room', null, 99) !== null,
-  'getSpriteAsset(room, null, 99) は modulo で variant 3 を引いて非 null');
+  'getSpriteAsset(room, null, 99) は modulo(99 % 2 = 1)で variant 1 を引いて非 null');
+// modulo 確認: variant 4 → 4 % 2 = 0 → 非 null(room_0 を引く)
+assert(getSpriteAsset('room', null, 4) !== null,
+  'getSpriteAsset(room, null, 4) は modulo(4 % 2 = 0)で variant 0 を引いて非 null');
 
-// room 以外は引き続き null(他の kind の URL は room_ を含まないため)
+// room 以外は引き続き null
 assert(getSpriteAsset('corridor', null, 0) === null,
-  'getSpriteAsset(corridor, null, 0) は null(rooms-only モードで room 以外は失敗)');
+  'getSpriteAsset(corridor, null, 0) は null(loaded=0)');
 assert(getSpriteAsset('wall', null, 0) === null,
   'getSpriteAsset(wall, null, 0) は null');
 assert(getSpriteAsset('door', 'closed', 0) === null,
@@ -157,15 +171,15 @@ assert(getSpriteAsset('door', 'closed', 0) === null,
 assert(getSpriteAsset('stairs', 'up', 0) === null,
   'getSpriteAsset(stairs, up, 0) は null');
 
-// 戻り値が後続の drawImage 経路に渡せる object であること(non-null かつ truthy)
+// 戻り値が後続の drawImage 経路に渡せる object であること
 const roomAsset = getSpriteAsset('room', null, 0);
 assert(typeof roomAsset === 'object' && roomAsset !== null,
   'roomAsset は object(SPRITE_DRAWERS_PNG の drawSpriteImage で ctx.drawImage に渡せる前提)');
 
 // getAssetStats も同じ部分成功状態を反映する
 const stats2 = getAssetStats();
-assert(stats2.total === 21, `getAssetStats.total === 21(got ${stats2.total})`);
-assert(stats2.ok === 4, `getAssetStats.ok === 4 部分成功後(got ${stats2.ok})`);
+assert(stats2.total === 2, `getAssetStats.total === 2(成功分のみ、got ${stats2.total})`);
+assert(stats2.ok === 2, `getAssetStats.ok === 2(got ${stats2.ok})`);
 console.log();
 
 // ----- Summary -----

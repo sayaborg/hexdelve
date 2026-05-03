@@ -48,7 +48,7 @@ function hexLine(a, b) {
   return line;
 }
 
-function carveCorridorToMainComponent(tiles, stairsHex, spawnHex) {
+function carveCorridorToMainComponent(tiles, stairsHex, spawnHex, radius) {
   const main = findMainFloorComponent(tiles);
   const mainSet = new Set(main.map((t) => tileKey(t.q, t.r)));
   const stairsKey = tileKey(stairsHex.q, stairsHex.r);
@@ -70,7 +70,7 @@ function carveCorridorToMainComponent(tiles, stairsHex, spawnHex) {
   if (!nearest) return;
 
   for (const step of hexLine(stairsHex, new Hex(nearest.q, nearest.r))) {
-    if (!isInsideWorld(step, CONFIG.worldRadius)) continue;
+    if (!isInsideWorld(step, radius)) continue;
     const t = tiles.get(tileKey(step.q, step.r));
     if (t) t.terrain = 'floor';
   }
@@ -267,6 +267,8 @@ function buildSourceCells(tiles, stairsInfo) {
             verticalMode: stairsInfo.verticalMode,
           },
         } : null,
+        // v1-0b.1.6(フェーズ 58): family 別タイルセット用の識別子。
+        meta: { family: 'cave_natural' },
       });
     } else {
       cells.push({
@@ -277,13 +279,14 @@ function buildSourceCells(tiles, stairsInfo) {
         sightD: 'block',
         structureKind: null,
         feature: null,
+        meta: { family: 'cave_natural' },
       });
     }
   }
   return cells;
 }
 
-function placeStairsForNaturalCave(tiles, playerStart, stairsConstraint, rng) {
+function placeStairsForNaturalCave(tiles, playerStart, stairsConstraint, rng, radius) {
   if (stairsConstraint) {
     const key = tileKey(stairsConstraint.q, stairsConstraint.r);
     const tile = tiles.get(key);
@@ -298,6 +301,7 @@ function placeStairsForNaturalCave(tiles, playerStart, stairsConstraint, rng) {
       tiles,
       new Hex(stairsConstraint.q, stairsConstraint.r),
       spawnHex,
+      radius,
     );
     return {
       q: stairsConstraint.q,
@@ -372,7 +376,7 @@ export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = crea
   let playerStart;
   let stairsInfo;
   if (stairsConstraint) {
-    stairsInfo = placeStairsForNaturalCave(bestTiles, { q: 0, r: 0 }, stairsConstraint, rng);
+    stairsInfo = placeStairsForNaturalCave(bestTiles, { q: 0, r: 0 }, stairsConstraint, rng, radius);
     // 遷移時配置(SPEC §9.9): 階段の opposite(enterHeading) 方向隣接、
     // facing = 旧 exitHeading = opposite(新 enterHeading)。
     const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
@@ -380,7 +384,7 @@ export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = crea
     playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: spawnHeading };
   } else {
     playerStart = choosePlayerStart(bestTiles);
-    stairsInfo = placeStairsForNaturalCave(bestTiles, playerStart, null, rng);
+    stairsInfo = placeStairsForNaturalCave(bestTiles, playerStart, null, rng, radius);
   }
 
   const enemies = chooseEnemySpawns(bestTiles, playerStart, rng, stairsInfo);

@@ -52,7 +52,9 @@ function hexLine(a, b) {
 
 // 階段タイル(および必要なら spawn 隣接)がメイン連結成分に含まれない場合、
 // メイン成分の最寄りタイルまで hex line で wall を floor に掘って連結を保証する。
-function carveCorridorToMainComponent(tiles, stairsHex, spawnHex) {
+// v1-0b.1.5(フェーズ 57): radius を引数で受ける(以前は CONFIG.worldRadius を直接参照、
+// テストや将来の map family で radius を変えると境界判定が崩れる可能性があった)。
+function carveCorridorToMainComponent(tiles, stairsHex, spawnHex, radius) {
   const main = findMainFloorComponent(tiles);
   const mainSet = new Set(main.map((t) => tileKey(t.q, t.r)));
   const stairsKey = tileKey(stairsHex.q, stairsHex.r);
@@ -77,7 +79,7 @@ function carveCorridorToMainComponent(tiles, stairsHex, spawnHex) {
 
   // 経路上のタイルを floor 化(world 内のみ)
   for (const step of hexLine(stairsHex, new Hex(nearest.q, nearest.r))) {
-    if (!isInsideWorld(step, CONFIG.worldRadius)) continue;
+    if (!isInsideWorld(step, radius)) continue;
     const t = tiles.get(tileKey(step.q, step.r));
     if (t) t.terrain = 'floor';
   }
@@ -139,7 +141,30 @@ function carveConnectedSkeleton(tiles, center, rng, params, radius) {
 
   setFloor(tiles, floorKeys, current.q, current.r);
 
+  // v1-0b.1.5(フェーズ 57): safety bound。理論上「全候補が既存 floor で setFloor が
+  // false を返し続ける」「weighted 選択が同じ wall を選び続ける」等の条件で進行が
+  // 止まる可能性がある(実測では発生せず)。floorTarget の 8 倍を上限とすれば、
+  // 想定通常ケースでは余裕、異常時は break して外側の attempt 再生成に委ねられる。
+  const maxIterations = Math.max(1000, floorTarget * 8);
+  let iterationCount = 0;
+  let lastFloorCount = 0;
+  let stallCount = 0;
+
   while (floorKeys.length < floorTarget) {
+    iterationCount += 1;
+    if (iterationCount > maxIterations) break;
+
+    // 進行が止まっている(floorKeys が増えない反復が一定回数続く)場合も break。
+    // candidates が空でも上の chosen=null で break するが、setFloor が常に false を
+    // 返し続けるパスを念のためここで救う。
+    if (floorKeys.length === lastFloorCount) {
+      stallCount += 1;
+      if (stallCount > 50) break;
+    } else {
+      stallCount = 0;
+      lastFloorCount = floorKeys.length;
+    }
+
     const candidates = [];
 
     for (let headingIndex = 0; headingIndex < EDGE_DIRECTIONS.length; headingIndex += 1) {
@@ -276,6 +301,9 @@ function buildSourceCells(tiles, radius, stairsInfo) {
             verticalMode: stairsInfo.verticalMode,
           },
         } : null,
+        // v1-0b.1.6(フェーズ 58): family 別タイルセット用の識別子。
+        // map-compile.js の buildBaseToken が参照する。
+        meta: { family: 'cave_walk' },
       });
     } else {
       cells.push({
@@ -286,6 +314,7 @@ function buildSourceCells(tiles, radius, stairsInfo) {
         sightD: 'block',
         structureKind: null,
         feature: null,
+        meta: { family: 'cave_walk' },
       });
     }
   }
@@ -295,7 +324,7 @@ function buildSourceCells(tiles, radius, stairsInfo) {
 // 階段の (q, r) / enterHeading / verticalMode を決定する(SPEC §12.5)。
 // stairsConstraint があればそれに従う。なければ: player から離れた floor で、
 // 歩行可能な隣接タイルを持つものをランダム選択。
-function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
+function placeStairsForCave(tiles, playerStart, stairsConstraint, rng, radius) {
   if (stairsConstraint) {
     // フロア遷移時の対応階段契約: 指定位置を強制で floor にし、プレイヤーが spawn する
     // opposite(enterHeading) 方向隣接も floor 化(そこに spawn するため)。
@@ -312,6 +341,7 @@ function placeStairsForCave(tiles, playerStart, stairsConstraint, rng) {
       tiles,
       new Hex(stairsConstraint.q, stairsConstraint.r),
       new Hex(stairsConstraint.q + spawnOffset.q, stairsConstraint.r + spawnOffset.r),
+      radius,
     );
     return {
       q: stairsConstraint.q,
@@ -382,13 +412,13 @@ export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(2
   let playerStart;
   let stairsInfo;
   if (stairsConstraint) {
-    stairsInfo = placeStairsForCave(tiles, { q: 0, r: 0 }, stairsConstraint, rng);
+    stairsInfo = placeStairsForCave(tiles, { q: 0, r: 0 }, stairsConstraint, rng, radius);
     const spawnHeading = oppositeHeading(stairsInfo.enterHeading);
     const off = EDGE_DIRECTIONS[spawnHeading];
     playerStart = { q: stairsInfo.q + off.q, r: stairsInfo.r + off.r, facing: spawnHeading };
   } else {
     playerStart = choosePlayerStart(tiles);
-    stairsInfo = placeStairsForCave(tiles, playerStart, null, rng);
+    stairsInfo = placeStairsForCave(tiles, playerStart, null, rng, radius);
   }
 
   const enemies = chooseEnemySpawns(tiles, playerStart, rng, stairsInfo);

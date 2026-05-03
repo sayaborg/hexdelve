@@ -45,15 +45,30 @@ function buildRuntimeCell(sourceCell) {
 
 // visualsByKey 向け baseToken は state 非依存(SPEC §7.1, §15.8)。
 // 見た目の state 差(closed/open/locked、up/down 等)は render が runtime.feature から読み取る。
+//
+// v1-0b.1.6(フェーズ 58): family 別タイルセット対応。room と wall を family ごとに別 kind に
+// 振り分ける(corridor / threshold / door / stairs / void は family 共通)。
+// family 情報は sourceCell.meta.family から取得。
 function buildBaseToken(sourceCell) {
   if (!sourceCell) return 'void';
   if (sourceCell.feature?.kind === 'door') return 'door';
   if (sourceCell.feature?.kind === 'stairs') return 'stairs';
   if (sourceCell.structureKind === 'threshold') return 'threshold';
   if (sourceCell.structureKind === 'corridor') return 'corridor';
-  if (sourceCell.structureKind === 'cave') return 'room';  // v0 は cave も通常床扱いで描画
-  if (sourceCell.support === 'stable') return 'room';
-  return 'wall';
+
+  const family = sourceCell.meta?.family ?? null;
+
+  // floor 系(立てる場所)
+  if (sourceCell.structureKind === 'cave' || sourceCell.support === 'stable') {
+    if (family === 'cave_walk') return 'cave_walk_room';
+    if (family === 'cave_natural') return 'cave_natural_room';
+    return 'room';  // rooms_classic、または family 不明時の fallback
+  }
+
+  // wall 系(立てない場所)
+  if (family === 'cave_walk') return 'cave_walk_wall';
+  if (family === 'cave_natural') return 'cave_natural_wall';
+  return 'wall';  // rooms_classic、または family 不明時の fallback
 }
 
 // v1-0a(NEXT_STEPS §2.1): (q, r) ベースの決定的 hash。

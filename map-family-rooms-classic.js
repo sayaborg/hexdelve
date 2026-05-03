@@ -341,6 +341,13 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   // (3) 全構造化セルの 6 隣接で未登録のセルを wall で囲む
   addWallRing(cellMap);
 
+  // v1-0b.1.6(フェーズ 58): family 別タイルセット用の識別子を全 cell に付与。
+  // map-compile.js の buildBaseToken が参照する。addCell 自体には触れず、
+  // 一括付与で簡潔に。既存 meta(roomId / corridorId / side 等)は保持。
+  for (const cell of cellMap.values()) {
+    cell.meta = { ...cell.meta, family: 'rooms_classic' };
+  }
+
   // プレイヤー初期位置
   //   初期フロア: centerRoom.center (= (0, 0))、facing = 0
   //   フロア遷移: 階段の「開口部側」= opposite(enterHeading) 方向隣接タイルに spawn。

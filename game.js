@@ -756,21 +756,26 @@ function bootstrap() {
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.4 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.7 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
 
   // v1-0b.1(CHANGELOG フェーズ 51): スプライトプリロード。
   // 非同期に投入し、完了時に再 render する(progressive enhancement)。
   // アセットが揃っていない初期段階は programmatic フォールバックで描画継続するため、
   // この await を待たなくても操作は始められる。
-  preloadAllSprites().then(({ total, ok }) => {
+  preloadAllSprites().then(({ total, ok, byKind }) => {
     if (ok > 0) {
-      logInternal('system', 'SPRITE', `スプライトアセット読み込み完了: ${ok}/${total} 枚(残りは programmatic フォールバック)。`);
+      // v1-0b.1.7(フェーズ 59): 動的検出で kind ごとにロードできた枚数をログに残す
+      const kindBreakdown = Array.from(byKind.entries())
+        .filter(([, count]) => count > 0)
+        .map(([kind, count]) => `${kind}=${count}`)
+        .join(', ');
+      logInternal('system', 'SPRITE', `スプライトアセット読み込み完了: ${ok} 枚成功(${kindBreakdown})。残りは programmatic フォールバック。`);
       // v1-0b.1.3(フェーズ 55、最適化 G): render は state ハッシュベースで skip するため、
       // PNG 投入後に強制再描画する場合は invalidateRender を先に呼ぶ。
       invalidateRender();
       render(state);
-    } else if (total > 0) {
-      logInternal('system', 'SPRITE', `スプライトアセット未配置(${total} 枚すべて 404)。programmatic フォールバックで描画。`);
+    } else {
+      logInternal('system', 'SPRITE', `スプライトアセット未配置(全 kind で 1 枚も検出されず)。programmatic フォールバックで描画。`);
     }
   }).catch((err) => {
     logInternal('system', 'SPRITE', `スプライトアセット読み込みエラー: ${err?.message ?? err}`);

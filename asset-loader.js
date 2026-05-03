@@ -5,48 +5,80 @@
 //   - PNG が無くても動く(programmatic フォールバックを render 側に保持)
 //   - 段階的投入を許容(kind ごとに揃わなくても OK、足りない asset は null を返す)
 //   - 主画面のみが消費(副画面は完全 programmatic、本モジュールを参照しない)
-//   - サイズは 256×222 px(頂点間 × 辺間、size=128、flat-top hex)。
-//     v1-0b.1.3(フェーズ 55)で 128×111 から 2 倍に拡大。
-//     iOS Retina(DPR=2)で実機物理ピクセルとほぼ 1:1、PC(DPR=1)では縮小描画になる。
+//   - サイズは 512×443 px(頂点間 × 辺間、size=256、flat-top hex)。
+//     v1-0b.1.6(フェーズ 58)で 256×222 から 2 倍に拡大。
+//     iOS Pro 高解像度(DPR=3)でも物理ピクセルとほぼ 1:1、PC(DPR=1)では大幅縮小。
 //     drawImage は dw = tileRadius * 2、dh = tileRadius * √3 の比率で行うため、
 //     PNG 解像度の変更にコード変更は不要(比率ベース描画)。
+//   - hex 外側は透明(下地の canvas 背景色を透かす)。
 //
 // アセット配置: assets/sprites/ ディレクトリ
 //   命名規則:
-//     room_{variant}.png         (variant = 0..3)
-//     corridor_{variant}.png
-//     threshold_{variant}.png
-//     wall_{variant}.png
-//     door_{state}.png           (state = closed | open | locked)
-//     stairs_{state}.png         (state = up | down)
-//   void は単色のため programmatic 維持。
+//     {kind}_{variant}.png       (variant = 0, 1, 2, ...、連番)
+//     {kind}_{state}.png         (state = closed | open | locked、up | down 等)
 //
-// variant が 1 種類しか用意されていない場合(初期投入時)、variantCount を 1 にして
-// modulo で 0 番に集約する。完全 4 variant 投入時は variantCount を 4 にする。
+// v1-0b.1.7(フェーズ 59): variant 数を **動的検出** 方式に変更。
+//   variant ベース kind は SPRITE_MANIFEST に枚数を書かず、{kind}_0.png から連番で
+//   ロード試行し、最初に 404 になった番号で打ち切り。実投入数 = ロード成功した枚数。
+//   これにより:
+//     - 1 枚も無ければ 0 件として扱い、programmatic フォールバックに完全に委ねる
+//     - 2 枚あれば 2 variant として動作、3 枚なら 3 variant
+//     - PNG 配置時に SPRITE_MANIFEST の数値を手で更新する作業が不要
+//   状態ベース kind(door / stairs)は固定 state リスト、従来通り。
 
+// 安全装置:variant 連番の探索打ち切り上限。
+const MAX_PROBE_VARIANTS = 16;
+
+// kind 体系(v1-0b.1.6 以降):
+//   - room / wall: rooms_classic 用(後方互換)
+//   - cave_walk_room / cave_walk_wall: cave_walk family 用
+//   - cave_natural_room / cave_natural_wall: cave_natural family 用
+//   - corridor / threshold: family 共通(variant ベース)
+//   - door / stairs: 固定 state(state ベース)
+//   - void: PNG 不要(programmatic のみ)
+//
+// v1-0b.1.7 以降の SPRITE_MANIFEST:
+//   - variantBased: true → 連番プローブ式、ファイル数から動的に variantCount 確定
+//   - states: [...] → 固定 state リスト、ファイル数固定
 const SPRITE_MANIFEST = {
-  room:      { variantCount: 4, states: null },
-  corridor:  { variantCount: 4, states: null },
-  threshold: { variantCount: 4, states: null },
-  wall:      { variantCount: 4, states: null },
-  door:      { variantCount: 1, states: ['closed', 'open', 'locked'] },
-  stairs:    { variantCount: 1, states: ['up', 'down'] },
+  // rooms_classic family(動的検出)
+  room:               { variantBased: true },
+  wall:               { variantBased: true },
+  // cave_walk family(動的検出)
+  cave_walk_room:     { variantBased: true },
+  cave_walk_wall:     { variantBased: true },
+  // cave_natural family(動的検出)
+  cave_natural_room:  { variantBased: true },
+  cave_natural_wall:  { variantBased: true },
+  // family 共通 variant ベース(動的検出)
+  corridor:           { variantBased: true },
+  threshold:          { variantBased: true },
+  // family 共通 state ベース(固定)
+  door:               { states: ['closed', 'open', 'locked'] },
+  stairs:             { states: ['up', 'down'] },
 };
 
 const ASSET_BASE_PATH = './assets/sprites/';
 
-// asset cache: key → HTMLImageElement | null(404 時は null を保持)
+// asset cache: key → HTMLImageElement(成功した分のみ保持)
+// キーは spriteAssetKey で生成。404 だったエントリは登録しない(getSpriteAsset で null を返す)。
 const assetCache = new Map();
+
+// kind ごとの実ロード variant 数(動的検出結果)。
+// 0 = 1 枚も無し → programmatic フォールバック。
+// >0 = ロード成功枚数(連番 0..n-1)、modulo マッピングで使う。
+const loadedVariantCounts = new Map();
 
 function spriteAssetKey(kind, state, variant) {
   return `${kind}:${state ?? '-'}:${variant ?? 0}`;
 }
 
-function spriteFileName(kind, state, variant) {
-  if (state) {
-    return `${kind}_${state}.png`;
-  }
+function variantFileName(kind, variant) {
   return `${kind}_${variant}.png`;
+}
+
+function stateFileName(kind, state) {
+  return `${kind}_${state}.png`;
 }
 
 // 1 枚の画像を非同期に読み込む。失敗時は null で resolve(reject しない)。
@@ -59,59 +91,110 @@ function loadImage(url) {
   });
 }
 
-// 全アセットをプリロード。onProgress(done, total) を逐次呼ぶ(オプション)。
-// 全 task が resolve されるまで待つ(404 もエラー扱いせず、cache に null が入るだけ)。
-export async function preloadAllSprites(onProgress = null) {
-  const tasks = [];
+// kind の variant 連番を 0 から順にロード試行する。最初に失敗した番号で打ち切り、
+// 成功した枚数を返す。安全装置として MAX_PROBE_VARIANTS で上限を切る。
+//
+// 連番が途切れたかの判定は「失敗が出た時点で停止」。例:
+//   room_0.png: ok, room_1.png: ok, room_2.png: 404 → variantCount = 2
+// (room_2 がなくて room_3 だけある、というケースは検出しない。連番運用前提。)
+async function probeVariantSequence(kind) {
+  let count = 0;
+  for (let variant = 0; variant < MAX_PROBE_VARIANTS; variant += 1) {
+    const url = ASSET_BASE_PATH + variantFileName(kind, variant);
+    const img = await loadImage(url);
+    if (img === null) break;  // 連番途切れ → 打ち切り
+    assetCache.set(spriteAssetKey(kind, null, variant), img);
+    count += 1;
+  }
+  return count;
+}
 
+// 状態ベース kind の固定 state リストをロード。各 state ごとに 1 枚。
+// 失敗は許容(個別の state が欠けても他の state は使える)。
+async function loadStateAssets(kind, states) {
+  const tasks = states.map(async (state) => {
+    const url = ASSET_BASE_PATH + stateFileName(kind, state);
+    const img = await loadImage(url);
+    if (img !== null) {
+      assetCache.set(spriteAssetKey(kind, state, 0), img);
+    }
+    return img !== null;
+  });
+  const results = await Promise.all(tasks);
+  return results.filter(Boolean).length;
+}
+
+// 全アセットをプリロード。動的検出のため total / done の概念は単純な「ロード試行数」ではない:
+//   variant ベース kind は MAX_PROBE_VARIANTS まで試行する可能性があるため、
+//   total は「実際に成功 + 1 回の打ち切り 404」の合計の上界。
+//   onProgress は粒度の参考値として呼ぶが、進捗バーには向かない。
+//
+// 戻り値:
+//   - total: 試行された fetch 回数(成功 + 打ち切り 404 を含む)
+//   - ok: 成功してキャッシュに入った枚数
+//   - byKind: kind ごとの成功枚数(variant 数 / state 数)を Map で返す(debug 用)
+export async function preloadAllSprites(onProgress = null) {
+  loadedVariantCounts.clear();
+
+  // kind ごとに並列で probe / load を走らせる
+  const tasks = [];
   for (const [kind, def] of Object.entries(SPRITE_MANIFEST)) {
-    const states = def.states ?? [null];
-    for (const state of states) {
-      for (let variant = 0; variant < def.variantCount; variant += 1) {
-        const key = spriteAssetKey(kind, state, variant);
-        const url = ASSET_BASE_PATH + spriteFileName(kind, state, variant);
-        tasks.push(
-          loadImage(url).then((img) => {
-            assetCache.set(key, img);
-            return { key, ok: img !== null };
-          }),
-        );
-      }
+    if (def.variantBased) {
+      tasks.push(
+        probeVariantSequence(kind).then((count) => {
+          loadedVariantCounts.set(kind, count);
+          // 試行回数 = 成功数 + 打ち切り 404(MAX 到達時は 404 なし)
+          const probed = count + (count < MAX_PROBE_VARIANTS ? 1 : 0);
+          return { kind, ok: count, probed };
+        }),
+      );
+    } else if (def.states) {
+      tasks.push(
+        loadStateAssets(kind, def.states).then((okCount) => {
+          loadedVariantCounts.set(kind, okCount);  // state ベースも便宜的に記録
+          return { kind, ok: okCount, probed: def.states.length };
+        }),
+      );
     }
   }
 
-  const total = tasks.length;
-  let done = 0;
-  const wrappedTasks = tasks.map((task) =>
-    task.then((result) => {
-      done += 1;
-      onProgress?.(done, total, result);
-      return result;
-    }),
-  );
+  const results = await Promise.all(tasks);
+  const total = results.reduce((sum, r) => sum + r.probed, 0);
+  const ok = results.reduce((sum, r) => sum + r.ok, 0);
 
-  const results = await Promise.all(wrappedTasks);
-  const okCount = results.filter((r) => r.ok).length;
-  return { total, ok: okCount };
+  const byKind = new Map();
+  for (const r of results) byKind.set(r.kind, r.ok);
+
+  // 進捗 callback は最終結果でだけ呼ぶ(プローブ式は逐次粒度を作りにくい)
+  onProgress?.(total, total, { byKind });
+
+  return { total, ok, byKind };
 }
 
 // drawer から呼ぶ。指定 kind/state/variant の HTMLImageElement または null を返す。
-// variant は manifest の variantCount で modulo されるため、unsafe な variant 値が
-// 来ても OOB しない(compileMap の variant=0..3 がそのまま渡る前提)。
+//   - state ベース kind: state を見て直接 lookup(variant は無視)
+//   - variant ベース kind: loadedVariantCounts[kind] が 0 なら null、>0 なら variant % count で modulo
 export function getSpriteAsset(kind, state, variant) {
   const def = SPRITE_MANIFEST[kind];
   if (!def) return null;
-  const effectiveVariant = (variant ?? 0) % def.variantCount;
-  return assetCache.get(spriteAssetKey(kind, state, effectiveVariant)) ?? null;
+
+  if (def.states) {
+    return assetCache.get(spriteAssetKey(kind, state, 0)) ?? null;
+  }
+
+  // variant ベース
+  const loaded = loadedVariantCounts.get(kind) ?? 0;
+  if (loaded === 0) return null;  // 1 枚も無し → programmatic フォールバック
+  const effectiveVariant = (variant ?? 0) % loaded;
+  return assetCache.get(spriteAssetKey(kind, null, effectiveVariant)) ?? null;
 }
 
 // debug 用: キャッシュ状況の集計。preloadAllSprites の戻り値と用語を揃える({total, ok})。
+//   total = キャッシュに登録されたエントリ数(全て成功分、404 は登録されない)
+//   ok = total と同じ(404 を null で持たないため)
+//   v1-0b.1.7 で挙動変更:旧方式は 404 も null で cache に入れていたが、
+//   新方式では成功分のみ cache 登録するため total === ok となる。
 export function getAssetStats() {
-  let total = 0;
-  let ok = 0;
-  for (const [, img] of assetCache.entries()) {
-    total += 1;
-    if (img !== null) ok += 1;
-  }
-  return { total, ok };
+  const total = assetCache.size;
+  return { total, ok: total };
 }

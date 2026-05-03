@@ -77,7 +77,7 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 //   PNG drawer は ctx.filter を一切使わない(iOS Safari < 18 で未実装のため)
 // ==============================================================================
 
-// PNG 描画スケール:アセットは 128×111 px(頂点間 128 = 2×size、辺間 111 ≈ √3×size、size=64)。
+// PNG 描画スケール:アセットは 256×222 px(頂点間 256 = 2×size、辺間 222 ≈ √3×size、size=128、フェーズ 55 で 128→256 に拡大)。
 // drawImage 時の dst サイズは tileRadius を size とみなして比例縮小する。
 const SQRT3 = Math.sqrt(3);
 
@@ -313,14 +313,21 @@ function drawVoidSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
   drawHex(ctx, cx, cy, tileRadius - 1, palette.fill, palette.stroke);
 }
 
+// v1-0b.1.6(フェーズ 58): family 別タイルセット対応。
+// programmatic 描画では family 差を出さない(programmatic は最小限のフォールバック表示で、
+// 視覚的差異は PNG 投入後に明確化する設計)。room/wall の drawer をそのままエイリアス。
 const SPRITE_DRAWERS_PROG = {
-  room:      drawRoomSpriteProg,
-  corridor:  drawCorridorSpriteProg,
-  threshold: drawThresholdSpriteProg,
-  wall:      drawWallSpriteProg,
-  door:      drawDoorSpriteProg,
-  stairs:    drawStairsSpriteProg,
-  void:      drawVoidSpriteProg,
+  room:                drawRoomSpriteProg,
+  wall:                drawWallSpriteProg,
+  cave_walk_room:      drawRoomSpriteProg,
+  cave_walk_wall:      drawWallSpriteProg,
+  cave_natural_room:   drawRoomSpriteProg,
+  cave_natural_wall:   drawWallSpriteProg,
+  corridor:            drawCorridorSpriteProg,
+  threshold:           drawThresholdSpriteProg,
+  door:                drawDoorSpriteProg,
+  stairs:              drawStairsSpriteProg,
+  void:                drawVoidSpriteProg,
 };
 
 // ==============================================================================
@@ -331,9 +338,10 @@ const SPRITE_DRAWERS_PROG = {
 // near/known mode は ctx.filter で post-effect(blur / brightness / saturate)。
 // ==============================================================================
 
-// PNG を hex タイル位置に描画。アセットは 128×111(size=64)、tileRadius を新 size として
+// PNG を hex タイル位置に描画。アセットは 256×222(size=128、フェーズ 55 で拡大)、tileRadius を新 size として
 // 比例縮小して drawImage する。rotation は 60° × index で個別回転。
-// ctx.filter は呼び出し側で save/restore して適用する。
+// 比率ベース(dw = tileRadius * 2、dh = tileRadius * √3)で描くため、
+// PNG 解像度の変更にコード変更は不要。
 function drawSpriteImage(ctx, img, cx, cy, tileRadius, rotationIndex) {
   const dw = tileRadius * 2;
   const dh = tileRadius * SQRT3;
@@ -376,14 +384,25 @@ const drawWallSpritePng = makePngDrawer('wall', null, false, drawWallSpriteProg)
 const drawDoorSpritePng = makePngDrawer('door', (key) => key.state ?? 'closed', false, drawDoorSpriteProg);
 const drawStairsSpritePng = makePngDrawer('stairs', (key) => key.state ?? 'down', true, drawStairsSpriteProg);
 
+// v1-0b.1.6(フェーズ 58): family 別タイル用の PNG drawer。
+// PNG が無ければ programmatic にフォールバック(共通 drawer 再利用)。
+const drawCaveWalkRoomSpritePng = makePngDrawer('cave_walk_room', null, false, drawRoomSpriteProg);
+const drawCaveWalkWallSpritePng = makePngDrawer('cave_walk_wall', null, false, drawWallSpriteProg);
+const drawCaveNaturalRoomSpritePng = makePngDrawer('cave_natural_room', null, false, drawRoomSpriteProg);
+const drawCaveNaturalWallSpritePng = makePngDrawer('cave_natural_wall', null, false, drawWallSpriteProg);
+
 const SPRITE_DRAWERS_PNG = {
-  room:      drawRoomSpritePng,
-  corridor:  drawCorridorSpritePng,
-  threshold: drawThresholdSpritePng,
-  wall:      drawWallSpritePng,
-  door:      drawDoorSpritePng,
-  stairs:    drawStairsSpritePng,
-  void:      drawVoidSpriteProg,  // void は PNG 不要、programmatic 維持
+  room:                drawRoomSpritePng,
+  wall:                drawWallSpritePng,
+  cave_walk_room:      drawCaveWalkRoomSpritePng,
+  cave_walk_wall:      drawCaveWalkWallSpritePng,
+  cave_natural_room:   drawCaveNaturalRoomSpritePng,
+  cave_natural_wall:   drawCaveNaturalWallSpritePng,
+  corridor:            drawCorridorSpritePng,
+  threshold:           drawThresholdSpritePng,
+  door:                drawDoorSpritePng,
+  stairs:              drawStairsSpritePng,
+  void:                drawVoidSpriteProg,  // void は PNG 不要、programmatic 維持
 };
 
 // ==============================================================================
@@ -414,11 +433,14 @@ function getTileSprite(cell) {
 
 // getTileRotation(cell) → degrees
 // タイル単位の個別回転(world 全体回転とは独立)。
+// 引数 cell は **world cell**(プレイヤー相対座標ではない)。getTileSprite と同じく
+// world 由来で安定しているため、プレイヤー移動で同じ world tile の回転が変動することはない。
 // v1-0a(S7): 階段タイルは enterHeading 方向が画面上向き(-90°)になるよう回転。
 //   「enterHeading が画面上」= 世界座標で enterHeading 方向のディテールが画面の上を向く。
 //   世界回転と合成されるので、プレイヤーから見ると「階段の進行方向」が明示される。
 //   v1-0b の PNG 差し替え時、階段スプライトの段々/矢印が正しい向きで描画される。
-// 他のタイルは 0(個別回転なし)。
+// 他のタイルは 0(個別回転なし)。なお visual.rotation は visualsByKey に焼き込まれて
+// world cell key 単位で保存されており、こちらも安定。
 function getTileRotation(cell) {
   const feature = getFeature(cell);
   if (feature?.kind === 'stairs') {
