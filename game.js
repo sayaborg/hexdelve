@@ -595,10 +595,10 @@ function getGeneratedPreset(mapId = null) {
 }
 
 function generateMapByFamily(family, { radius, rng, params = {}, stairsConstraint = null }) {
-  if (family === 'cave_natural') {
+  if (family === 'cavern') {
     return generateNaturalCaveMap({ radius, rng, params, stairsConstraint });
   }
-  if (family === 'rooms_classic') {
+  if (family === 'rooms') {
     return generateClassicRoomsMap({ radius, rng, params, stairsConstraint });
   }
   return generateCaveMap({ radius, rng, params, stairsConstraint });
@@ -616,7 +616,7 @@ function generateMapFromPreset(mapId, stairsConstraint = null, seed) {
   }
   const resolvedSeed = seed >>> 0;
   const rng = createRng(resolvedSeed);
-  const params = preset.family === 'rooms_classic'
+  const params = preset.family === 'rooms'
     ? { seed: resolvedSeed, ...(preset.params ?? {}) }
     : (preset.params ?? {});
   return generateMapByFamily(preset.family, {
@@ -641,12 +641,12 @@ function updateMapUi() {
     mapSelect.value = state.currentMapId;
   }
   if (mapMeta) {
-    if (state.currentMapId === 'generated_cave_walk') {
+    if (state.currentMapId === 'generated_tunnel') {
       mapMeta.textContent = '歩行掘削型Cave。連結掘削 + 控えめなふくらみ + 軽いループ追加。';
-    } else if (state.currentMapId === 'generated_cave_natural') {
+    } else if (state.currentMapId === 'generated_cavern') {
       mapMeta.textContent = '自然洞窟寄りCave。Cellular Automata で塊を作り、最大連結成分のみ採用。';
-    } else if (state.currentMapId === 'generated_rooms_classic') {
-      mapMeta.textContent = 'rooms_classic: room / corridor / threshold / door(closed/open/locked) / stairs を持つ古典型マップ。';
+    } else if (state.currentMapId === 'generated_rooms') {
+      mapMeta.textContent = 'rooms: floor / corridor / threshold / door(closed/open/locked) / stairs を持つ古典型マップ。';
     } else {
       mapMeta.textContent = '';
     }
@@ -756,7 +756,7 @@ function bootstrap() {
   const initialSeed = readUrlSeedParam();  // null なら resetRun 側で Date.now() 採用
   resetRunWithGeneratedMap(CONFIG.defaultGeneratedMapId, { keepLog: true, seedOverride: initialSeed });
 
-  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.7 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
+  logInternal('system', 'INIT', `HEX 版 NetHack 風ローグライク v1-0b.1.9 初期化。主画面タップで 6 方向移動(中心=待機)、スワイプで回頭。キーボードは ← / → 回頭 / QWEASD 移動 / Z 待機 / F3 debug。`);
 
   // v1-0b.1(CHANGELOG フェーズ 51): スプライトプリロード。
   // 非同期に投入し、完了時に再 render する(progressive enhancement)。

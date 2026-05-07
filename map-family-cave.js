@@ -278,7 +278,7 @@ function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
 
 function buildSourceCells(tiles, radius, stairsInfo) {
   // source cell を直接出力(adapter 非経由)。
-  // 洞窟タイル: structureKind='cave', stable, sightH=pass, sightD=block
+  // 洞窟タイル: structureKind='floor', stable, sightH=pass, sightD=block
   // 外側タイル: structureKind=null, blocked, sightH=block, sightD=block
   // 階段タイル: 上記洞窟タイルに feature.kind='stairs' を重ねる
   const cells = [];
@@ -291,7 +291,7 @@ function buildSourceCells(tiles, radius, stairsInfo) {
         support: 'stable',
         sightH: 'pass',
         sightD: 'block',
-        structureKind: 'cave',
+        structureKind: 'floor',
         feature: isStairs ? {
           kind: 'stairs',
           state: 'normal',
@@ -303,7 +303,7 @@ function buildSourceCells(tiles, radius, stairsInfo) {
         } : null,
         // v1-0b.1.6(フェーズ 58): family 別タイルセット用の識別子。
         // map-compile.js の buildBaseToken が参照する。
-        meta: { family: 'cave_walk' },
+        meta: { family: 'tunnel' },
       });
     } else {
       cells.push({
@@ -314,7 +314,7 @@ function buildSourceCells(tiles, radius, stairsInfo) {
         sightD: 'block',
         structureKind: null,
         feature: null,
-        meta: { family: 'cave_walk' },
+        meta: { family: 'tunnel' },
       });
     }
   }
@@ -431,7 +431,7 @@ export function generateCaveMap({ radius = CONFIG.worldRadius, rng = createRng(2
     enemies,
     stairs: stairsInfo,
     meta: {
-      family: 'cave',
+      family: 'tunnel',
       radius,
       floorCount: collectFloorTiles(tiles).length,
       params: resolvedParams,

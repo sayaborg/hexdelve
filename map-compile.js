@@ -12,7 +12,12 @@ export function resolve(sourceCell) {
   const baseSightD = sourceCell.sightD;
   const feature = sourceCell.feature;
 
-  if (feature?.kind === 'door') {
+  // v1-0b.1.9(フェーズ 61.1): door / door_lock 両方に同じロジックを適用。
+  // door_lock は v1-0b では生成されないが、コード経路を完備しておく(v1 で鍵 item と
+  // 同時に生成復活時、resolve / getTileSprite が即座に動作することを保証)。
+  // 鍵保持判定や「鍵を持っているなら closed の door_lock を開けられる」等の細かい挙動は
+  // v1 で入力処理側で扱う(resolve は物理的な「閉まっていれば通れない」だけを表現)。
+  if (feature?.kind === 'door' || feature?.kind === 'door_lock') {
     if (feature.state === 'closed' || feature.state === 'locked') {
       return {
         support: 'blocked',
@@ -46,29 +51,32 @@ function buildRuntimeCell(sourceCell) {
 // visualsByKey 向け baseToken は state 非依存(SPEC §7.1, §15.8)。
 // 見た目の state 差(closed/open/locked、up/down 等)は render が runtime.feature から読み取る。
 //
-// v1-0b.1.6(フェーズ 58): family 別タイルセット対応。room と wall を family ごとに別 kind に
-// 振り分ける(corridor / threshold / door / stairs / void は family 共通)。
-// family 情報は sourceCell.meta.family から取得。
+// v1-0b.1.6(フェーズ 58): family 別タイルセット対応。
+// v1-0b.1.8(フェーズ 60): 命名整流 — family は rooms / tunnel / cavern、structureKind は
+//   'floor' / 'wall' / 'corridor' / 'threshold' に統一。
+// v1-0b.1.9(フェーズ 61): 全 kind に family prefix 適用。door は lock 機構ありなしで
+//   feature.kind を 'door' / 'door_lock' に分離。corridor / threshold / door / stairs も
+//   {family}_xxx 形式で family ごとに別タイルとして扱う(family 不明時は generic fallback)。
 function buildBaseToken(sourceCell) {
   if (!sourceCell) return 'void';
-  if (sourceCell.feature?.kind === 'door') return 'door';
-  if (sourceCell.feature?.kind === 'stairs') return 'stairs';
-  if (sourceCell.structureKind === 'threshold') return 'threshold';
-  if (sourceCell.structureKind === 'corridor') return 'corridor';
-
   const family = sourceCell.meta?.family ?? null;
+  const fp = family ? `${family}_` : '';  // family prefix(family 不明時は空 = generic kind)
 
-  // floor 系(立てる場所)
-  if (sourceCell.structureKind === 'cave' || sourceCell.support === 'stable') {
-    if (family === 'cave_walk') return 'cave_walk_room';
-    if (family === 'cave_natural') return 'cave_natural_room';
-    return 'room';  // rooms_classic、または family 不明時の fallback
+  // feature ベース(door / door_lock / stairs)
+  if (sourceCell.feature?.kind === 'door')      return `${fp}door`;
+  if (sourceCell.feature?.kind === 'door_lock') return `${fp}door_lock`;
+  if (sourceCell.feature?.kind === 'stairs')    return `${fp}stairs`;
+
+  // structureKind ベース(threshold / corridor / floor / wall)
+  if (sourceCell.structureKind === 'threshold') return `${fp}threshold`;
+  if (sourceCell.structureKind === 'corridor')  return `${fp}corridor`;
+  if (sourceCell.structureKind === 'floor' || sourceCell.support === 'stable') {
+    return `${fp}floor`;
   }
-
-  // wall 系(立てない場所)
-  if (family === 'cave_walk') return 'cave_walk_wall';
-  if (family === 'cave_natural') return 'cave_natural_wall';
-  return 'wall';  // rooms_classic、または family 不明時の fallback
+  if (sourceCell.structureKind === 'wall' || sourceCell.support === 'blocked') {
+    return `${fp}wall`;
+  }
+  return 'void';
 }
 
 // v1-0a(NEXT_STEPS §2.1): (q, r) ベースの決定的 hash。

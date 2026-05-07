@@ -4,12 +4,12 @@ import { createRng } from './rng.js';
 import { selectEnemiesWithMinDistanceRelaxation } from './map-spawn.js';
 
 // ==============================================================================
-// rooms_classic family — v1-0b.1.2 フェーズ 54.2 で全面再設計
+// rooms family — v1-0b.1.2 フェーズ 54.2 で全面再設計
 // ==============================================================================
 //
 // 構造化された手順で source map を組み立てる:
 //
-//   1. 部屋の内側を floor(structureKind: 'room')で塗り潰す
+//   1. 部屋の内側を floor(structureKind: 'floor')で塗り潰す
 //   2. 中心部屋 ↔ 各外部屋を corridor で繋ぐ
 //      - 各部屋の出入口に threshold(structureKind: 'threshold')を 1 マス置く
 //      - threshold 同士を corridor(structureKind: 'corridor')で直線接続
@@ -57,7 +57,7 @@ function addCell(cellMap, hex, patch) {
     support: patch.support ?? prev?.support ?? 'stable',
     sightH: patch.sightH ?? prev?.sightH ?? 'pass',
     sightD: patch.sightD ?? prev?.sightD ?? 'block',
-    structureKind: patch.structureKind ?? prev?.structureKind ?? 'room',
+    structureKind: patch.structureKind ?? prev?.structureKind ?? 'floor',
     feature: patch.feature ?? prev?.feature ?? null,
     meta: { ...(prev?.meta ?? {}), ...(patch.meta ?? {}) },
   });
@@ -71,7 +71,7 @@ function addRoomDisk(cellMap, center, radius, roomId) {
         support: 'stable',
         sightH: 'pass',
         sightD: 'block',
-        structureKind: 'room',
+        structureKind: 'floor',
         feature: null,
         meta: { roomId },
       });
@@ -182,7 +182,7 @@ function collectRoomFloorCells(cellMap, rooms, reserved) {
   for (const room of rooms) {
     for (const [key, cell] of cellMap.entries()) {
       if (cell.meta?.roomId !== room.id) continue;
-      if (cell.structureKind !== 'room') continue;
+      if (cell.structureKind !== 'floor') continue;
       if (reserved.has(key)) continue;
       candidates.push(cell);
     }
@@ -286,7 +286,7 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   // 中心部屋に階段 feature を載せる(addRoomDisk 後なので room の上に重ねる)
   const stairsHex = new Hex(stairsInfo.q, stairsInfo.r);
   addCell(cellMap, stairsHex, {
-    structureKind: 'room',
+    structureKind: 'floor',
     feature: {
       kind: 'stairs',
       state: 'normal',
@@ -300,11 +300,12 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   });
 
   // (2) 中心部屋 ↔ 各外部屋を corridor で繋ぐ
-  // v0 動作確認用: 外部屋のうち 1 つの出口を closed ドア、もう 1 つを locked ドアにする。
-  // 3 部屋(外 2 つ)なら 1 つずつ、4 部屋(外 3 つ)なら 1 つは扉なし。
+  // v1-0b.1.9(フェーズ 61): door_lock 生成は v1 以降に延期(鍵 item 未実装のため、
+  // 開かないドアが見えると不可解)。現時点では closed ドアのみ生成する。
+  // v1 で鍵 item と door_lock を同時実装する想定。
+  // 外部屋のうち 1 つの出口を closed ドア(lock 機構なし、誰でも開閉可)に。
   const outerRooms = rooms.slice(1);
   const closedDoorRoomId = outerRooms[0]?.id ?? null;
-  const lockedDoorRoomId = outerRooms[1]?.id ?? null;
 
   for (const room of outerRooms) {
     const corridorId = `c_${centerRoom.id}_${room.id}`;
@@ -317,13 +318,10 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
       corridorId,
     );
     // 外部屋側の threshold(threshold2 = farThreshold)に door を配置する
-    let doorState = null;
-    if (room.id === closedDoorRoomId) doorState = 'closed';
-    else if (room.id === lockedDoorRoomId) doorState = 'locked';
-    if (doorState) {
+    if (room.id === closedDoorRoomId) {
       addCell(cellMap, farThreshold, {
         structureKind: 'threshold',
-        feature: { kind: 'door', state: doorState, params: {} },
+        feature: { kind: 'door', state: 'closed', params: {} },
         meta: { corridorId, roomId: room.id, side: 'far' },
       });
     } else {
@@ -345,7 +343,7 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
   // map-compile.js の buildBaseToken が参照する。addCell 自体には触れず、
   // 一括付与で簡潔に。既存 meta(roomId / corridorId / side 等)は保持。
   for (const cell of cellMap.values()) {
-    cell.meta = { ...cell.meta, family: 'rooms_classic' };
+    cell.meta = { ...cell.meta, family: 'rooms' };
   }
 
   // プレイヤー初期位置
@@ -374,7 +372,7 @@ export function generateClassicRoomsMap({ radius = CONFIG.worldRadius, rng = nul
     enemies,
     stairs: stairsInfo,
     meta: {
-      family: 'rooms_classic',
+      family: 'rooms',
       radius,
       floorCount: cells.filter((cell) => cell.support === 'stable').length,
       roomCount,

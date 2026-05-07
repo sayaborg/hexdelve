@@ -228,7 +228,7 @@ function chooseEnemySpawns(tiles, playerStart, rng, stairsInfo = null) {
     if (stairsInfo && tile.q === stairsInfo.q && tile.r === stairsInfo.r) return false;
     const dist = hexDistance(origin, new Hex(tile.q, tile.r));
     // SPEC §11.3: プレイヤー初期位置から hexDistance >= 5。
-    // 上限 24 は cave_natural family の過密回避のための family 固有値(SPEC §11.3)。
+    // 上限 24 は cavern family の過密回避のための family 固有値(SPEC §11.3)。
     return dist >= 5 && dist <= 24;
   });
   // shuffle 結果を緩和ループの全段階で再利用(SPEC §11.3 の「配置順の決定論」規約)。
@@ -257,7 +257,7 @@ function buildSourceCells(tiles, stairsInfo) {
         support: 'stable',
         sightH: 'pass',
         sightD: 'block',
-        structureKind: 'cave',
+        structureKind: 'floor',
         feature: isStairs ? {
           kind: 'stairs',
           state: 'normal',
@@ -268,7 +268,7 @@ function buildSourceCells(tiles, stairsInfo) {
           },
         } : null,
         // v1-0b.1.6(フェーズ 58): family 別タイルセット用の識別子。
-        meta: { family: 'cave_natural' },
+        meta: { family: 'cavern' },
       });
     } else {
       cells.push({
@@ -279,7 +279,7 @@ function buildSourceCells(tiles, stairsInfo) {
         sightD: 'block',
         structureKind: null,
         feature: null,
-        meta: { family: 'cave_natural' },
+        meta: { family: 'cavern' },
       });
     }
   }
@@ -395,6 +395,6 @@ export function generateNaturalCaveMap({ radius = CONFIG.worldRadius, rng = crea
     playerStart,
     enemies,
     stairs: stairsInfo,
-    meta: { family: 'cave_natural', radius, floorCount: collectFloorTiles(bestTiles).length, params: resolvedParams },
+    meta: { family: 'cavern', radius, floorCount: collectFloorTiles(bestTiles).length, params: resolvedParams },
   };
 }

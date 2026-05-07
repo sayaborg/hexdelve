@@ -109,9 +109,9 @@ const total = {
   stairsUnreachable: 0,
 };
 for (const [label, gen] of [
-  ['rooms_classic', generateClassicRoomsMap],
-  ['cave_walk    ', generateCaveMap],
-  ['cave_natural ', generateNaturalCaveMap],
+  ['rooms        ', generateClassicRoomsMap],
+  ['tunnel       ', generateCaveMap],
+  ['cavern       ', generateNaturalCaveMap],
 ]) {
   const stats = inspectSpawn(label, gen, SEED_RANGE);
   total.countViolation += stats.countViolation;

@@ -15,7 +15,12 @@
 // アセット配置: assets/sprites/ ディレクトリ
 //   命名規則:
 //     {kind}_{variant}.png       (variant = 0, 1, 2, ...、連番)
-//     {kind}_{state}.png         (state = closed | open | locked、up | down 等)
+//     {kind}_{state}.png         (state は kind ごとに異なる)
+//   例:
+//     rooms_floor_0.png 〜 rooms_floor_3.png(variant ベース)
+//     rooms_door_closed.png / rooms_door_open.png(door は 2 state)
+//     rooms_door_lock_locked.png / rooms_door_lock_closed.png / rooms_door_lock_open.png(door_lock は 3 state)
+//     rooms_stairs_up.png / rooms_stairs_down.png(stairs は 2 state、family ごとに別 PNG)
 //
 // v1-0b.1.7(フェーズ 59): variant 数を **動的検出** 方式に変更。
 //   variant ベース kind は SPRITE_MANIFEST に枚数を書かず、{kind}_0.png から連番で
@@ -29,33 +34,51 @@
 // 安全装置:variant 連番の探索打ち切り上限。
 const MAX_PROBE_VARIANTS = 16;
 
-// kind 体系(v1-0b.1.6 以降):
-//   - room / wall: rooms_classic 用(後方互換)
-//   - cave_walk_room / cave_walk_wall: cave_walk family 用
-//   - cave_natural_room / cave_natural_wall: cave_natural family 用
-//   - corridor / threshold: family 共通(variant ベース)
-//   - door / stairs: 固定 state(state ベース)
+// kind 体系(v1-0b.1.9 / フェーズ 61 で全 kind に family prefix + door 分離):
+//
+// rooms family(古典 NetHack 部屋 + 通路、door / corridor / threshold を持つ):
+//   - rooms_floor / rooms_wall: 部屋内床 / 壁
+//   - rooms_corridor / rooms_threshold: 通路 / 出入口
+//   - rooms_door: lock 機構なしのドア(closed / open、誰でも操作可)
+//   - rooms_door_lock: lock 機構付きドア(locked / closed / open、鍵保持者のみ操作可)
+//     ※ v1-0b.1.9 時点では生成されない(鍵 item 未実装、v1 で復活予定)
+//   - rooms_stairs: 階段(up / down)
+//
+// tunnel family(蛇行通路型洞窟、洞窟そのものが通路なので corridor / threshold / door を持たない):
+//   - tunnel_floor / tunnel_wall
+//   - tunnel_stairs
+//
+// cavern family(自然洞窟、同様):
+//   - cavern_floor / cavern_wall
+//   - cavern_stairs
+//
+// 共通 fallback:
+//   - floor / wall: family 不明時の generic fallback(動的検出のみ、通常は 0 件)
 //   - void: PNG 不要(programmatic のみ)
 //
-// v1-0b.1.7 以降の SPRITE_MANIFEST:
+// SPRITE_MANIFEST 形式:
 //   - variantBased: true → 連番プローブ式、ファイル数から動的に variantCount 確定
 //   - states: [...] → 固定 state リスト、ファイル数固定
 const SPRITE_MANIFEST = {
-  // rooms_classic family(動的検出)
-  room:               { variantBased: true },
+  // rooms family
+  rooms_floor:        { variantBased: true },
+  rooms_wall:         { variantBased: true },
+  rooms_corridor:     { variantBased: true },
+  rooms_threshold:    { variantBased: true },
+  rooms_door:         { states: ['closed', 'open'] },
+  rooms_door_lock:    { states: ['locked', 'closed', 'open'] },
+  rooms_stairs:       { states: ['up', 'down'] },
+  // tunnel family
+  tunnel_floor:       { variantBased: true },
+  tunnel_wall:        { variantBased: true },
+  tunnel_stairs:      { states: ['up', 'down'] },
+  // cavern family
+  cavern_floor:       { variantBased: true },
+  cavern_wall:        { variantBased: true },
+  cavern_stairs:      { states: ['up', 'down'] },
+  // generic fallback(動的検出、family 不明時に使う想定。通常は 0 件)
+  floor:              { variantBased: true },
   wall:               { variantBased: true },
-  // cave_walk family(動的検出)
-  cave_walk_room:     { variantBased: true },
-  cave_walk_wall:     { variantBased: true },
-  // cave_natural family(動的検出)
-  cave_natural_room:  { variantBased: true },
-  cave_natural_wall:  { variantBased: true },
-  // family 共通 variant ベース(動的検出)
-  corridor:           { variantBased: true },
-  threshold:          { variantBased: true },
-  // family 共通 state ベース(固定)
-  door:               { states: ['closed', 'open', 'locked'] },
-  stairs:             { states: ['up', 'down'] },
 };
 
 const ASSET_BASE_PATH = './assets/sprites/';

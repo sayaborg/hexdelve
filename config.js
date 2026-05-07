@@ -1,10 +1,10 @@
 export const CONFIG = {
   worldRadius: 40,
-  defaultGeneratedMapId: 'generated_rooms_classic',
+  defaultGeneratedMapId: 'generated_rooms',
   generatedMaps: {
-    generated_cave_walk: {
-      label: 'Generated cave / walk',
-      family: 'cave',
+    generated_tunnel: {
+      label: 'Generated / Tunnel',
+      family: 'tunnel',
       seed: 20260415,
       params: {
         floorRate: 0.36,
@@ -12,9 +12,9 @@ export const CONFIG = {
         chokeDensity: 0.30,
       },
     },
-    generated_cave_natural: {
-      label: 'Generated cave / natural',
-      family: 'cave_natural',
+    generated_cavern: {
+      label: 'Generated / Cavern',
+      family: 'cavern',
       seed: 20260418,
       params: {
         fillProb: 0.49,
@@ -23,9 +23,9 @@ export const CONFIG = {
         minFloorCount: 300,
       },
     },
-    generated_rooms_classic: {
-      label: 'Generated / Rooms Classic',
-      family: 'rooms_classic',
+    generated_rooms: {
+      label: 'Generated / Rooms',
+      family: 'rooms',
       seed: 20260419,
       params: {},
     },

@@ -62,8 +62,14 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 //
 // 構造(論点 C 合意 2026-04-24):
 //   spriteKey = { kind, state, variant, rotation }
-//     kind:     'room' | 'corridor' | 'threshold' | 'wall' | 'door' | 'stairs' | 'void'
-//     state:    door: 'closed'|'open'|'locked'、stairs: 'up'|'down'(verticalMode)、他は null
+//     kind:     rooms family:  'rooms_floor' | 'rooms_wall' | 'rooms_corridor' |
+//                              'rooms_threshold' | 'rooms_door' | 'rooms_door_lock' | 'rooms_stairs'
+//               tunnel family: 'tunnel_floor' | 'tunnel_wall' | 'tunnel_stairs'
+//               cavern family: 'cavern_floor' | 'cavern_wall' | 'cavern_stairs'
+//               generic:       'floor' | 'wall' | 'void'
+//               (v1-0b.1.9 / フェーズ 61 で全 kind に family prefix、door は lock 機構ありなしで分離)
+//     state:    door: 'closed'|'open'、door_lock: 'locked'|'closed'|'open'、
+//               stairs: 'up'|'down'(verticalMode)、他は null
 //     variant:  0..3(visualsByKey に焼き込み済み、座標決定的)
 //     rotation: 0..5(同上)
 //
@@ -77,8 +83,8 @@ function drawLabel(ctx, x, y, text, color, fontSize = 11) {
 //   PNG drawer は ctx.filter を一切使わない(iOS Safari < 18 で未実装のため)
 // ==============================================================================
 
-// PNG 描画スケール:アセットは 256×222 px(頂点間 256 = 2×size、辺間 222 ≈ √3×size、size=128、フェーズ 55 で 128→256 に拡大)。
-// drawImage 時の dst サイズは tileRadius を size とみなして比例縮小する。
+// PNG 描画スケール:アセットは 512×443 px(頂点間 512 = 2×size、辺間 443 ≈ √3×size、size=256、v1-0b.1.6 / フェーズ 58 で 256×222 から 2 倍に拡大)。
+// drawImage 時の dst サイズは tileRadius を size とみなして比例縮小する(比率ベース描画なので PNG 解像度の変更にコード変更は不要)。
 const SQRT3 = Math.sqrt(3);
 
 // タイル色のバリアント補正(輝度調整)。
@@ -316,18 +322,32 @@ function drawVoidSpriteProg(ctx, cx, cy, tileRadius, spriteKey, mode) {
 // v1-0b.1.6(フェーズ 58): family 別タイルセット対応。
 // programmatic 描画では family 差を出さない(programmatic は最小限のフォールバック表示で、
 // 視覚的差異は PNG 投入後に明確化する設計)。room/wall の drawer をそのままエイリアス。
+// v1-0b.1.9(フェーズ 61): 全 kind に family prefix。door は lock 機構ありなしで分離。
+// programmatic 描画では family 差・lock 差を出さず、共通の drawer をエイリアス
+// (PNG 投入時に family / lock 差が出る設計)。
+// generic 'floor' / 'wall' は family 不明時のフォールバック(後方互換)。
 const SPRITE_DRAWERS_PROG = {
-  room:                drawRoomSpriteProg,
-  wall:                drawWallSpriteProg,
-  cave_walk_room:      drawRoomSpriteProg,
-  cave_walk_wall:      drawWallSpriteProg,
-  cave_natural_room:   drawRoomSpriteProg,
-  cave_natural_wall:   drawWallSpriteProg,
-  corridor:            drawCorridorSpriteProg,
-  threshold:           drawThresholdSpriteProg,
-  door:                drawDoorSpriteProg,
-  stairs:              drawStairsSpriteProg,
-  void:                drawVoidSpriteProg,
+  // rooms family
+  rooms_floor:      drawRoomSpriteProg,
+  rooms_wall:       drawWallSpriteProg,
+  rooms_corridor:   drawCorridorSpriteProg,
+  rooms_threshold:  drawThresholdSpriteProg,
+  rooms_door:       drawDoorSpriteProg,
+  rooms_door_lock:  drawDoorSpriteProg,  // lock 機構ありもプログラム描画では同じ(PNG で差別化)
+  rooms_stairs:     drawStairsSpriteProg,
+  // tunnel family
+  tunnel_floor:     drawRoomSpriteProg,
+  tunnel_wall:      drawWallSpriteProg,
+  tunnel_stairs:    drawStairsSpriteProg,
+  // cavern family
+  cavern_floor:     drawRoomSpriteProg,
+  cavern_wall:      drawWallSpriteProg,
+  cavern_stairs:    drawStairsSpriteProg,
+  // generic fallback
+  floor:            drawRoomSpriteProg,
+  wall:             drawWallSpriteProg,
+  // 共通
+  void:             drawVoidSpriteProg,
 };
 
 // ==============================================================================
@@ -338,8 +358,8 @@ const SPRITE_DRAWERS_PROG = {
 // near/known mode は ctx.filter で post-effect(blur / brightness / saturate)。
 // ==============================================================================
 
-// PNG を hex タイル位置に描画。アセットは 256×222(size=128、フェーズ 55 で拡大)、tileRadius を新 size として
-// 比例縮小して drawImage する。rotation は 60° × index で個別回転。
+// PNG を hex タイル位置に描画。アセットは 512×443 px(size=256、v1-0b.1.6 / フェーズ 58 で 256×222 から 2 倍に拡大)、
+// tileRadius を新 size として比例縮小して drawImage する。rotation は 60° × index で個別回転。
 // 比率ベース(dw = tileRadius * 2、dh = tileRadius * √3)で描くため、
 // PNG 解像度の変更にコード変更は不要。
 function drawSpriteImage(ctx, img, cx, cy, tileRadius, rotationIndex) {
@@ -377,32 +397,54 @@ function makePngDrawer(kind, getStateForKey, useTileRotation, progDrawer) {
   };
 }
 
-const drawRoomSpritePng = makePngDrawer('room', null, false, drawRoomSpriteProg);
-const drawCorridorSpritePng = makePngDrawer('corridor', null, false, drawCorridorSpriteProg);
-const drawThresholdSpritePng = makePngDrawer('threshold', null, false, drawThresholdSpriteProg);
-const drawWallSpritePng = makePngDrawer('wall', null, false, drawWallSpriteProg);
-const drawDoorSpritePng = makePngDrawer('door', (key) => key.state ?? 'closed', false, drawDoorSpriteProg);
-const drawStairsSpritePng = makePngDrawer('stairs', (key) => key.state ?? 'down', true, drawStairsSpriteProg);
-
-// v1-0b.1.6(フェーズ 58): family 別タイル用の PNG drawer。
+// v1-0b.1.9(フェーズ 61): 全 kind に family prefix。door は lock 機構ありなしで分離。
 // PNG が無ければ programmatic にフォールバック(共通 drawer 再利用)。
-const drawCaveWalkRoomSpritePng = makePngDrawer('cave_walk_room', null, false, drawRoomSpriteProg);
-const drawCaveWalkWallSpritePng = makePngDrawer('cave_walk_wall', null, false, drawWallSpriteProg);
-const drawCaveNaturalRoomSpritePng = makePngDrawer('cave_natural_room', null, false, drawRoomSpriteProg);
-const drawCaveNaturalWallSpritePng = makePngDrawer('cave_natural_wall', null, false, drawWallSpriteProg);
+
+// rooms family
+const drawRoomsFloorSpritePng     = makePngDrawer('rooms_floor',     null, false, drawRoomSpriteProg);
+const drawRoomsWallSpritePng      = makePngDrawer('rooms_wall',      null, false, drawWallSpriteProg);
+const drawRoomsCorridorSpritePng  = makePngDrawer('rooms_corridor',  null, false, drawCorridorSpriteProg);
+const drawRoomsThresholdSpritePng = makePngDrawer('rooms_threshold', null, false, drawThresholdSpriteProg);
+const drawRoomsDoorSpritePng      = makePngDrawer('rooms_door',      (key) => key.state ?? 'closed', false, drawDoorSpriteProg);
+const drawRoomsDoorLockSpritePng  = makePngDrawer('rooms_door_lock', (key) => key.state ?? 'locked', false, drawDoorSpriteProg);
+const drawRoomsStairsSpritePng    = makePngDrawer('rooms_stairs',    (key) => key.state ?? 'down', true,  drawStairsSpriteProg);
+
+// tunnel family
+const drawTunnelFloorSpritePng    = makePngDrawer('tunnel_floor',    null, false, drawRoomSpriteProg);
+const drawTunnelWallSpritePng     = makePngDrawer('tunnel_wall',     null, false, drawWallSpriteProg);
+const drawTunnelStairsSpritePng   = makePngDrawer('tunnel_stairs',   (key) => key.state ?? 'down', true,  drawStairsSpriteProg);
+
+// cavern family
+const drawCavernFloorSpritePng    = makePngDrawer('cavern_floor',    null, false, drawRoomSpriteProg);
+const drawCavernWallSpritePng     = makePngDrawer('cavern_wall',     null, false, drawWallSpriteProg);
+const drawCavernStairsSpritePng   = makePngDrawer('cavern_stairs',   (key) => key.state ?? 'down', true,  drawStairsSpriteProg);
+
+// generic fallback(family 不明時、PNG 投入は想定しないが SPRITE_DRAWERS_PNG エントリは持つ)
+const drawFloorSpritePng          = makePngDrawer('floor',           null, false, drawRoomSpriteProg);
+const drawWallSpritePng           = makePngDrawer('wall',            null, false, drawWallSpriteProg);
 
 const SPRITE_DRAWERS_PNG = {
-  room:                drawRoomSpritePng,
-  wall:                drawWallSpritePng,
-  cave_walk_room:      drawCaveWalkRoomSpritePng,
-  cave_walk_wall:      drawCaveWalkWallSpritePng,
-  cave_natural_room:   drawCaveNaturalRoomSpritePng,
-  cave_natural_wall:   drawCaveNaturalWallSpritePng,
-  corridor:            drawCorridorSpritePng,
-  threshold:           drawThresholdSpritePng,
-  door:                drawDoorSpritePng,
-  stairs:              drawStairsSpritePng,
-  void:                drawVoidSpriteProg,  // void は PNG 不要、programmatic 維持
+  // rooms family
+  rooms_floor:      drawRoomsFloorSpritePng,
+  rooms_wall:       drawRoomsWallSpritePng,
+  rooms_corridor:   drawRoomsCorridorSpritePng,
+  rooms_threshold:  drawRoomsThresholdSpritePng,
+  rooms_door:       drawRoomsDoorSpritePng,
+  rooms_door_lock:  drawRoomsDoorLockSpritePng,
+  rooms_stairs:     drawRoomsStairsSpritePng,
+  // tunnel family
+  tunnel_floor:     drawTunnelFloorSpritePng,
+  tunnel_wall:      drawTunnelWallSpritePng,
+  tunnel_stairs:    drawTunnelStairsSpritePng,
+  // cavern family
+  cavern_floor:     drawCavernFloorSpritePng,
+  cavern_wall:      drawCavernWallSpritePng,
+  cavern_stairs:    drawCavernStairsSpritePng,
+  // generic fallback
+  floor:            drawFloorSpritePng,
+  wall:             drawWallSpritePng,
+  // 共通(PNG 不要)
+  void:             drawVoidSpriteProg,
 };
 
 // ==============================================================================
@@ -418,7 +460,9 @@ function getTileSprite(cell) {
   }
   const feature = getFeature(cell);
   let state = null;
-  if (feature?.kind === 'door') {
+  // v1-0b.1.9(フェーズ 61.1): door / door_lock 両方の state を拾う。
+  // door_lock は v1-0b では生成されないが、PNG drawer が state を必要とするため経路を完備。
+  if (feature?.kind === 'door' || feature?.kind === 'door_lock') {
     state = feature.state;
   } else if (feature?.kind === 'stairs') {
     state = feature.params?.verticalMode ?? null;
@@ -577,7 +621,7 @@ function drawCellLayer2(ctx, cell, drawHexCoord, tileRadius, originX, originY, s
 function getTileHeight(cell) {
   const runtime = getRuntimeCell(cell);
   if (!runtime) {
-    // 構造化セル外(= 完全 void)。フェーズ 54.2/54.3 で rooms_classic は wall を
+    // 構造化セル外(= 完全 void)。フェーズ 54.2/54.3 で rooms family は wall を
     // 明示登録するようになったため、通常運用では runtime null になるのは worldRadius 内で
     // 一切登録されていない極外周のみ。保険として z=+h を返す(将来 wall 未登録の family が
     // 入っても shadow を落とせるため)。
